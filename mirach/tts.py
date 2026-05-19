@@ -37,8 +37,8 @@ class PiperSpeaker:
         self._voice: PiperVoice | None = None
         self._sample_rate: int = 22050
         self._stream: sd.OutputStream | None = None
-        self._stream_lock = threading.Lock()   # short critical sections around _stream
-        self._playback_lock = threading.Lock() # only one speak() runs at a time
+        self._stream_lock = threading.Lock()  # short critical sections around _stream
+        self._playback_lock = threading.Lock()  # only one speak() runs at a time
         self._filler_cache: dict[str, str] = {}
 
     def load(self) -> None:
@@ -54,7 +54,9 @@ class PiperSpeaker:
         with self._playback_lock:
             assert self._voice is not None, "Piper not loaded"
             syn_config = SynthesisConfig(length_scale=config.VOICE_SPEED)
-            chunks = (c.audio_int16_bytes for c in self._voice.synthesize(text, syn_config=syn_config))
+            chunks = (
+                c.audio_int16_bytes for c in self._voice.synthesize(text, syn_config=syn_config)
+            )
             self._play_stream(chunks, self._sample_rate)
 
     def speak_filler(self, phrase: str) -> None:
@@ -66,7 +68,10 @@ class PiperSpeaker:
             else:
                 assert self._voice is not None, "Piper not loaded"
                 syn_config = SynthesisConfig(length_scale=config.VOICE_SPEED)
-                chunks = (c.audio_int16_bytes for c in self._voice.synthesize(phrase, syn_config=syn_config))
+                chunks = (
+                    c.audio_int16_bytes
+                    for c in self._voice.synthesize(phrase, syn_config=syn_config)
+                )
                 self._play_stream(chunks, self._sample_rate)
 
     def interrupt(self) -> None:

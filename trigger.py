@@ -4,6 +4,7 @@
 Standalone: only sends "toggle" to the daemon via its Unix socket. No imports,
 no model loading, no extra latency.
 """
+
 import os
 import socket
 import subprocess
@@ -17,10 +18,15 @@ try:
     s.connect(SOCKET_PATH)
     s.sendall(b"toggle")
     s.close()
-except (ConnectionRefusedError, FileNotFoundError, socket.timeout):
+except (ConnectionRefusedError, FileNotFoundError, TimeoutError):
     subprocess.run(
-        ["notify-send", "-i", "dialog-error", "🤖 Mirach",
-         "Daemon is not running. Start it with: systemctl --user start mirach"],
+        [
+            "notify-send",
+            "-i",
+            "dialog-error",
+            "🤖 Mirach",
+            "Daemon is not running. Start it with: systemctl --user start mirach",
+        ],
         capture_output=True,
     )
     sys.exit(1)

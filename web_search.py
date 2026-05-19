@@ -7,6 +7,7 @@ Region and result count are configurable via env vars:
   - MIRACH_SEARCH_REGION (default: wt-wt)
   - MIRACH_SEARCH_MAX_RESULTS (default: 5)
 """
+
 import os
 import sys
 

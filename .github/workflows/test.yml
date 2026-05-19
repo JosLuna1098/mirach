@@ -25,6 +25,10 @@ jobs:
           python-version: ${{ matrix.python }}
           cache: pip
 
+      - name: Install PortAudio (Linux runtime dep for sounddevice)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libportaudio2
+
       - name: Install package (CPU-only, dev extras)
         shell: bash
         run: |
@@ -45,6 +49,5 @@ jobs:
         if: matrix.python == '3.12'
         shell: bash
         run: |
-          pip install ruff
           ruff check .
           ruff format --check .

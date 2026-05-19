@@ -62,7 +62,7 @@ OPENCODE_TIMEOUT = _env_float("MIRACH_OPENCODE_TIMEOUT", 120.0)
 SESSION_IDLE_TIMEOUT = _env_float("MIRACH_SESSION_IDLE_TIMEOUT", 120.0)
 
 # --- User feedback ---
-BEEP_START_WAV    = os.path.join(_TMP, "mirach_beep_start.wav")
-BEEP_PROCESS_WAV  = os.path.join(_TMP, "mirach_beep_process.wav")
+BEEP_START_WAV = os.path.join(_TMP, "mirach_beep_start.wav")
+BEEP_PROCESS_WAV = os.path.join(_TMP, "mirach_beep_process.wav")
 BEEP_SHUTDOWN_WAV = os.path.join(_TMP, "mirach_beep_shutdown.wav")
 FILLER_DELAY_SEC = _env_float("MIRACH_FILLER_DELAY", 6.0)
