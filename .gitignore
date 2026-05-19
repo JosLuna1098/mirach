@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual env (created per-machine)
+venv/
+.venv/
+env/
+
+# Local user configuration (NEVER commit)
+system_prompt.md
+omarchy.md
+config.local.*
+.env
+.env.*
+
+# Secrets / credentials
+*.key
+*.pem
+*_secret*
+*_token*
+
+# Piper voice models (downloaded separately — see README)
+voices/*.onnx
+voices/*.onnx.json
+!voices/.gitkeep
+
+# Runtime artifacts
+logs/
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Claude Code project context (local only)
+CLAUDE.md

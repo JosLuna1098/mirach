@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mirach"
+version = "0.1.0"
+description = "Local-first voice assistant daemon (Whisper + Piper + LLM)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "josluna" }]
+dependencies = [
+    "faster-whisper>=1.2,<2.0",
+    "piper-tts>=1.4,<2.0",
+    "sounddevice>=0.5,<1.0",
+    "numpy>=1.26,<3.0",
+    "ddgs>=9.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+quality = [
+    # Anti-aliased downsampling. Falls back to a boxcar filter without scipy.
+    "scipy>=1.11",
+]
+
+[project.scripts]
+mirach = "mirach.assistant:main"
+mirach-trigger = "mirach.trigger:main"
+
+[tool.setuptools.packages.find]
+include = ["mirach*"]
+exclude = ["tests*"]
+
+# --- Tests ---
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+# --- Lint / format ---
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # bugbear
+    "SIM", # simplify
+]
+ignore = [
+    "E501",  # line length — ruff format owns this
+    "B008",  # function calls in defaults (used by typer-style code, not us, but harmless)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E402"]  # import after sys.path mutation in conftest
