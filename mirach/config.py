@@ -54,6 +54,7 @@ MIC_NAME = _env("MIRACH_MIC", "fifine")
 SAMPLE_RATE = _env_int("MIRACH_SAMPLE_RATE", 48000)
 WHISPER_SR = 16000  # Whisper requires 16 kHz input
 RMS_SILENCE_THRESHOLD = _env_float("MIRACH_RMS_SILENCE", 0.005)
+MAX_RECORDING_SEC = _env_float("MIRACH_MAX_RECORDING_SEC", 60.0)  # Safety cap
 
 # ── STT (Whisper) ─────────────────────────────────────────────────────
 WHISPER_MODEL = _env("MIRACH_WHISPER_MODEL", "medium")

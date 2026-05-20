@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import queue
 import shutil
 import subprocess
 import threading
@@ -21,24 +22,43 @@ from mirach import config
 
 log = logging.getLogger("mirach")
 
+# Single worker thread for notifications to avoid thread churn under burst conditions.
+_notify_queue: queue.Queue[tuple[str, str, str]] = queue.Queue()
+_notify_worker: threading.Thread | None = None
+
+
+def _notify_worker_loop() -> None:
+    """Background worker that processes notifications from the queue."""
+    while True:
+        title, body, icon = _notify_queue.get()
+        if title is None:  # Sentinel value to stop the worker
+            break
+        if shutil.which("notify-send"):
+            subprocess.run(
+                ["notify-send", "-t", "4000", "-i", icon, title, body],
+                capture_output=True,
+            )
+        _notify_queue.task_done()
+
+
+def _ensure_worker() -> None:
+    """Start the notification worker thread if not already running."""
+    global _notify_worker
+    if _notify_worker is None or not _notify_worker.is_alive():
+        _notify_worker = threading.Thread(target=_notify_worker_loop, daemon=True)
+        _notify_worker.start()
+
 
 def notify(title: str, body: str, icon: str = "dialog-information") -> None:
-    """Send a desktop notification asynchronously (non-blocking).
+    """Send a desktop notification asynchronously via a shared worker thread.
 
-    Spawns a daemon thread to run notify-send so the main pipeline is not
-    blocked by the subprocess. Silently skips if notify-send is unavailable.
+    Silently skips if notify-send is unavailable.
     """
     if not shutil.which("notify-send"):
         log.debug("notify-send unavailable — skipping: %s", title)
         return
-
-    def _send() -> None:
-        subprocess.run(
-            ["notify-send", "-t", "4000", "-i", icon, title, body],
-            capture_output=True,
-        )
-
-    threading.Thread(target=_send, daemon=True).start()
+    _ensure_worker()
+    _notify_queue.put((title, body, icon))
 
 
 def _generate_beep_wav(

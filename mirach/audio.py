@@ -62,7 +62,11 @@ class AudioRecorder:
         log.info("Recording started")
 
     def stop(self) -> np.ndarray | None:
-        """Stop the stream and return concatenated audio, or None if empty."""
+        """Stop the stream and return concatenated audio, or None if empty.
+
+        Enforces a maximum recording duration to prevent unbounded memory growth.
+        If the recording exceeds MAX_RECORDING_SEC, only the last portion is kept.
+        """
         if self._stream is not None:
             self._stream.stop()
             self._stream.close()
@@ -72,4 +76,15 @@ class AudioRecorder:
                 return None
             audio = np.concatenate(self._frames, axis=0).flatten()
             self._frames.clear()
+
+        # Enforce max duration: truncate to the last N seconds if exceeded
+        max_samples = int(config.SAMPLE_RATE * config.MAX_RECORDING_SEC)
+        if len(audio) > max_samples:
+            log.warning(
+                "Recording exceeded %.1fs (max), truncating to last %.1fs",
+                len(audio) / config.SAMPLE_RATE,
+                config.MAX_RECORDING_SEC,
+            )
+            audio = audio[-max_samples:]
+
         return audio

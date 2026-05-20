@@ -151,16 +151,17 @@ def generate_and_open() -> str | None:
         return None
 
     # Build message HTML
-    msg_html = ""
+    msg_parts = []
     for role, content in messages:
         label = "You" if role == "user" else "Mirach"
         escaped = _escape_html(content)
-        msg_html += (
+        msg_parts.append(
             f'<div class="message {role}">'
             f'<div class="label">{label}</div>'
             f"<div>{escaped}</div>"
-            f"</div>\n"
+            f"</div>"
         )
+    msg_html = "\n".join(msg_parts)
 
     # Render template
     ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(latest.stat().st_mtime))

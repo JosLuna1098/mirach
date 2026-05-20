@@ -77,9 +77,6 @@ nav:
       - User Scripts Format: reference/user-scripts-format.md
   - Explanation:
       - Design Decisions: explanation/design-decisions.md
-      - Why a Daemon: explanation/why-daemon.md
-      - Why OpenCode: explanation/why-opencode.md
-      - Why Whisper Medium: explanation/why-whisper-medium.md
 
 extra:
   social:

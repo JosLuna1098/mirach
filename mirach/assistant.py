@@ -243,7 +243,7 @@ class Assistant:
                         self._conv.append(i18n.t("assistant"), i18n.t(response_key))
                     else:
                         self._tts.speak(i18n.t("no_conversation"))
-                        self._conv.append(i18n.t("assistant"), "No conversation saved.")
+                        self._conv.append(i18n.t("assistant"), i18n.t("no_conversation"))
                 return
 
             # Step 4: Check user scripts (bypass LLM)

@@ -181,16 +181,14 @@ class OpenCodeBackend:
         t.start()
         return t
 
-    def _execute(self, query: str) -> tuple[str | None, str | None]:
+    def _execute(self, query: str, coding: bool) -> tuple[str | None, str | None]:
         """Run `opencode run` and parse the JSON-line output.
 
         Returns (response_text, new_session_id) or (None, None) on error/interrupt.
         Uses dynamic timeout based on whether the query is coding-related.
         """
-        timeout = (
-            config.OPENCODE_TIMEOUT_CODING if _is_coding_query(query) else config.OPENCODE_TIMEOUT
-        )
-        log.info("OpenCode timeout: %.0fs (coding=%s)", timeout, _is_coding_query(query))
+        timeout = config.OPENCODE_TIMEOUT_CODING if coding else config.OPENCODE_TIMEOUT
+        log.info("OpenCode timeout: %.0fs (coding=%s)", timeout, coding)
 
         cmd = [
             "opencode", "run",
@@ -262,6 +260,9 @@ class OpenCodeBackend:
         if new_session:
             self.reset_session()
 
+        # Determine timeout category once based on user query
+        coding = _is_coding_query(text)
+
         # Build query payload: system prompt + context on new sessions, raw text otherwise
         if new_session and system_prompt:
             context_block = ""
@@ -283,13 +284,9 @@ class OpenCodeBackend:
         )
 
         try:
-            response, new_id = self._execute(payload)
+            response, new_id = self._execute(payload, coding)
         except subprocess.TimeoutExpired:
-            timeout_label = (
-                config.OPENCODE_TIMEOUT_CODING
-                if _is_coding_query(text)
-                else config.OPENCODE_TIMEOUT
-            )
+            timeout_label = config.OPENCODE_TIMEOUT_CODING if coding else config.OPENCODE_TIMEOUT
             log.error("OpenCode timeout (%.0fs)", timeout_label)
             return LLMResult(i18n.t("timeout_error"), new_session, False, time.time() - t0)
         except Exception as e:

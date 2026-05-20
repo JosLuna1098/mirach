@@ -83,11 +83,10 @@ notify-send "System Status" "CPU: ${CPU}%\nMemory: ${MEM}\nDisk: ${DISK}"
 ```python
 #!/usr/bin/env python3
 # triggers: what day is it, what's today, qué día es hoy
-# response: Today is {{today}}.
+# response: Check the notification.
 
 import datetime
-from datetime import datetime
-today = datetime.now().strftime("%A, %B %d")
 import subprocess
+today = datetime.datetime.now().strftime("%A, %B %d")
 subprocess.run(["notify-send", "Today", today])
 ```

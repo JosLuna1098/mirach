@@ -78,11 +78,9 @@ FILLERS: dict[str, list[str]] = {
 
 
 def t(key: str) -> str:
-    """Translate a string key. Falls back to English if missing in current locale.
-
-    Also substitutes {hotkey} placeholder with the configured hotkey display string.
-    """
-    raw = STRINGS.get(LOCALE, STRINGS[DEFAULT_LOCALE]).get(key, STRINGS[DEFAULT_LOCALE][key])
+    """Translate a string key. Falls back to English, then to the key itself if missing."""
+    locale_dict = STRINGS.get(LOCALE, STRINGS[DEFAULT_LOCALE])
+    raw = locale_dict.get(key, STRINGS[DEFAULT_LOCALE].get(key, key))
     return raw.replace("{hotkey}", HOTKEY)
 
 

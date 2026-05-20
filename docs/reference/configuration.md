@@ -17,6 +17,7 @@ All settings are environment variables with sensible defaults. Override by expor
 | `MIRACH_MIC` | `fifine` | Substring match against microphone name |
 | `MIRACH_SAMPLE_RATE` | `48000` | Native sample rate of your microphone |
 | `MIRACH_RMS_SILENCE` | `0.005` | RMS threshold below which audio is discarded as silence |
+| `MIRACH_MAX_RECORDING_SEC` | `60.0` | Maximum recording duration in seconds (safety cap to prevent memory issues) |
 
 ## STT (Whisper)
 
@@ -51,7 +52,7 @@ All settings are environment variables with sensible defaults. Override by expor
 | `MIRACH_LOCALE` | `en` | UI language (`en`, `es`, or custom) |
 | `MIRACH_HOTKEY` | `Alt+Z` | Display label shown in notifications (cosmetic only) |
 | `MIRACH_FILLER_DELAY` | `6.0` | Seconds between filler phrases during long LLM calls |
-| `MIRACH_FILLERS` | _(localized)_ | Pipe-separated override for filler phrases, e.g. `"Wait.\|Thinking."` |
+| `MIRACH_FILLERS` | _(localized)_ | Pipe-separated override for filler phrases, e.g. `"Wait.|Thinking."` |
 
 ## Obsidian (persistent memory)
 
