@@ -11,8 +11,8 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "josluna" }]
 dependencies = [
-    "faster-whisper>=1.2,<2.0",
-    "piper-tts>=1.4,<2.0",
+    "faster-whisper>=1.2.1,<2.0",
+    "piper-tts>=1.4.2,<2.0",
     "sounddevice>=0.5,<1.0",
     "numpy>=1.26,<3.0",
 ]
