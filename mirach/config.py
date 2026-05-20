@@ -38,6 +38,8 @@ CONVERSATIONS_DIR = LOGS_DIR / "conversations"
 LOG_PATH = LOGS_DIR / "daemon.log"
 SYSTEM_PROMPT_PATH = Path(_env("MIRACH_SYSTEM_PROMPT", str(BASE_DIR / "system_prompt.md")))
 SOCKET_PATH = _env("MIRACH_SOCKET", os.path.join(_TMP, "mirach.sock"))
+CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache"))) / "mirach"
+SESSION_ID_PATH = CACHE_DIR / "session_id"
 
 # --- Audio ---
 MIC_NAME = _env("MIRACH_MIC", "fifine")
@@ -59,7 +61,7 @@ VOICE_SPEED = _env_float("MIRACH_VOICE_SPEED", 1.2)
 # --- LLM (OpenCode CLI) ---
 OPENCODE_MODEL = _env("MIRACH_OPENCODE_MODEL", "opencode/deepseek-v4-flash-free")
 OPENCODE_TIMEOUT = _env_float("MIRACH_OPENCODE_TIMEOUT", 120.0)
-SESSION_IDLE_TIMEOUT = _env_float("MIRACH_SESSION_IDLE_TIMEOUT", 120.0)
+SESSION_IDLE_TIMEOUT = _env_float("MIRACH_SESSION_IDLE_TIMEOUT", 3600.0)  # 1 hour
 
 # --- User feedback ---
 BEEP_START_WAV = os.path.join(_TMP, "mirach_beep_start.wav")

@@ -69,6 +69,25 @@ class OpenCodeBackend:
         self._proc: subprocess.Popen | None = None
         self._proc_lock = threading.Lock()
         self._interrupted = False
+        self._load_session_id()
+
+    def _load_session_id(self) -> None:
+        """Restore persisted session ID from disk if still valid."""
+        if config.SESSION_ID_PATH.exists():
+            try:
+                cached = config.SESSION_ID_PATH.read_text().strip()
+                if cached:
+                    self._session_id = cached
+                    self._last_interaction = config.SESSION_ID_PATH.stat().st_mtime
+                    log.info("Restored session ID from cache: %s", cached[:8])
+            except OSError:
+                pass
+
+    def _save_session_id(self) -> None:
+        """Persist current session ID to disk."""
+        if self._session_id:
+            config.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            config.SESSION_ID_PATH.write_text(self._session_id)
 
     @property
     def session_id(self) -> str | None:
@@ -81,6 +100,8 @@ class OpenCodeBackend:
 
     def reset_session(self) -> None:
         self._session_id = None
+        if config.SESSION_ID_PATH.exists():
+            config.SESSION_ID_PATH.unlink(missing_ok=True)
 
     def interrupt(self) -> None:
         """Kill the running OpenCode subprocess if any."""
@@ -206,6 +227,7 @@ class OpenCodeBackend:
 
         if new_id and new_id != self._session_id:
             self._session_id = new_id
+            self._save_session_id()
             log.info("Session ID: %s", self._session_id)
 
         self._last_interaction = time.time()
