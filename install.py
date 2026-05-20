@@ -916,6 +916,13 @@ def step_user_scripts(total: int) -> None:
     gitkeep = USER_SCRIPTS_DIR / ".gitkeep"
     if not gitkeep.exists():
         gitkeep.touch()
+
+    # Ensure any existing scripts are executable
+    for entry in sorted(USER_SCRIPTS_DIR.iterdir()):
+        if entry.suffix in (".sh", ".py") and entry.name != ".gitkeep":
+            mode = entry.stat().st_mode
+            entry.chmod(mode | 0o111)
+
     ok(f"User scripts directory ready: {USER_SCRIPTS_DIR}")
 
 

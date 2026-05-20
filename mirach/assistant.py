@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import atexit
 import contextlib
+import os
 import re
 import signal
+import stat
 import subprocess
 import sys
 import threading
@@ -175,7 +177,11 @@ class Assistant:
         return UserScript(path=path, triggers=triggers, response=response, description=description)
 
     def _load_user_scripts(self) -> list[UserScript]:
-        """Scan the user_scripts/ directory and parse all valid .sh/.py scripts."""
+        """Scan the user_scripts/ directory and parse all valid .sh/.py scripts.
+
+        Automatically fixes the executable bit on scripts that have valid
+        metadata but lack the execute permission.
+        """
         scripts_dir = config.BASE_DIR / "user_scripts"
         if not scripts_dir.is_dir():
             return []
@@ -185,6 +191,10 @@ class Assistant:
             if entry.suffix in (".sh", ".py") and entry.name != ".gitkeep":
                 parsed = self._parse_script_metadata(entry)
                 if parsed:
+                    if not os.access(entry, os.X_OK):
+                        mode = entry.stat().st_mode
+                        entry.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+                        log.info("Fixed executable bit on %s", entry.name)
                     scripts.append(parsed)
         return scripts
 
