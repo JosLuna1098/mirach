@@ -33,6 +33,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "timeout_error": "It took too long. Try again.",
         "generic_error": "There was an error. Try again.",
         "no_response": "No response. Try again.",
+        "still_working": "Still working on it...",
+        "complex_query": "This is taking a bit longer, still processing.",
+        "process_failed": "Something went wrong processing your request. Try again.",
     },
     "es": {
         "recording_start_title": "🎤 Escuchando...",
@@ -53,6 +56,9 @@ STRINGS: dict[str, dict[str, str]] = {
         "timeout_error": "Tardó demasiado. Inténtalo de nuevo.",
         "generic_error": "Hubo un error. Inténtalo de nuevo.",
         "no_response": "No obtuve respuesta. Inténtalo de nuevo.",
+        "still_working": "Sigo trabajando en ello...",
+        "complex_query": "Esto está tomando un poco más, sigo procesando.",
+        "process_failed": "Algo falló al procesar tu consulta. Intenta de nuevo.",
     },
 }
 

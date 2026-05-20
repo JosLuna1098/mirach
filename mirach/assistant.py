@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import atexit
 import contextlib
+import os
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -36,6 +38,34 @@ class _Interrupted(Exception):
 
 
 class Assistant:
+    RETURN_PATTERNS = [
+        "volví",
+        "he vuelto",
+        "estoy de vuelta",
+        "regresé",
+        "llegué",
+        "ya llegué",
+        "ya estoy aquí",
+        "ya volví",
+        "estoy aquí",
+    ]
+
+    STOP_PATTERNS = [
+        "silencio",
+        "detente",
+        "detén",
+        "detener",
+        "para la música",
+        "para el sonido",
+        "cállate",
+        "calla",
+        "suficiente",
+        "ya para",
+        "stop",
+        "cancela",
+        "cancelar",
+    ]
+
     def __init__(
         self,
         *,
@@ -88,6 +118,17 @@ class Assistant:
         self._stt.warmup()
         self._tts.prebake_fillers(i18n.fillers())
 
+    # --- Pattern matching ---
+    @staticmethod
+    def _is_return_greeting(text: str) -> bool:
+        t = text.lower().strip()
+        return any(p in t for p in Assistant.RETURN_PATTERNS)
+
+    @staticmethod
+    def _is_stop_command(text: str) -> bool:
+        t = text.lower().strip()
+        return any(p in t for p in Assistant.STOP_PATTERNS)
+
     # --- Main pipeline ---
     def _process(self) -> None:
         started = time.time()
@@ -107,6 +148,24 @@ class Assistant:
 
             self._check_interrupted()
             notify.notify(i18n.t("you_said"), text)
+
+            if self._is_return_greeting(text):
+                subprocess.Popen(
+                    [os.path.expanduser("~/mirach/play_return_song.sh")],
+                    start_new_session=True,
+                )
+                self._tts.speak("¡Bienvenido de vuelta! Back in Black sonando.")
+                self._conv.append(i18n.t("assistant"), "¡Bienvenido de vuelta!")
+                return
+
+            if self._is_stop_command(text):
+                subprocess.run(
+                    ["pkill", "-f", "mirach_backinblack"],
+                    capture_output=True,
+                )
+                self._tts.speak("Listo, música detenida.")
+                self._conv.append(i18n.t("assistant"), "Música detenida por voz.")
+                return
 
             new_session = self._llm.session_expired()
             if new_session:

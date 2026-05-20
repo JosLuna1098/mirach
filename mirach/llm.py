@@ -4,7 +4,10 @@ Wraps the subprocess and the user-facing feedback while the model works:
 - short beep when launching
 - spoken filler **repeated** every FILLER_DELAY_SEC, so the user keeps hearing
   signs of life on long queries
+- progressive feedback: different messages at different time thresholds
+- health check: detects if the subprocess dies before timeout
 - interruptible: the running OpenCode process can be killed via interrupt()
+- dynamic timeout: longer for coding-related queries
 """
 
 from __future__ import annotations
@@ -60,6 +63,12 @@ def _strip_markdown(text: str) -> str:
     return text.strip()
 
 
+def _is_coding_query(text: str) -> bool:
+    """Check if the query is likely a coding/programming task."""
+    lower = text.lower()
+    return any(kw in lower for kw in config.CODING_KEYWORDS)
+
+
 class OpenCodeBackend:
     def __init__(self, speak_filler: Callable[[str], None]) -> None:
         """`speak_filler` is the TTS function for short cached phrases."""
@@ -112,22 +121,63 @@ class OpenCodeBackend:
                 log.info("LLM interrupted")
 
     def _start_filler_loop(
-        self, proc: subprocess.Popen, stop_event: threading.Event
+        self, proc: subprocess.Popen, stop_event: threading.Event, start_time: float
     ) -> threading.Thread:
-        """Background thread that speaks a filler every FILLER_DELAY_SEC while proc runs."""
+        """Background thread with progressive feedback and health checks.
+
+        Time thresholds:
+        - 0-10s: normal fillers
+        - 10-30s: normal fillers + desktop notification
+        - 30-60s: "still working" filler
+        - 60s+: "complex query" filler + desktop notification
+        """
 
         def loop() -> None:
             phrases = i18n.fillers()
+            notified_10s = False
+            notified_60s = False
             while not stop_event.wait(config.FILLER_DELAY_SEC):
+                elapsed = time.time() - start_time
                 if proc.poll() is not None or stop_event.is_set():
                     return
-                self._speak_filler(random.choice(phrases))
+
+                # Health check: subprocess died unexpectedly
+                if proc.poll() is not None:
+                    log.warning("OpenCode subprocess died unexpectedly at %.1fs", elapsed)
+                    return
+
+                # Progressive feedback by time
+                if elapsed >= 60 and not notified_60s:
+                    notified_60s = True
+                    notify.notify(
+                        i18n.t("processing_title"),
+                        i18n.t("complex_query"),
+                        "dialog-information",
+                    )
+                    self._speak_filler(i18n.t("complex_query"))
+                elif elapsed >= 30:
+                    self._speak_filler(i18n.t("still_working"))
+                elif elapsed >= 10 and not notified_10s:
+                    notified_10s = True
+                    notify.notify(
+                        i18n.t("processing_title"),
+                        i18n.t("processing_body"),
+                        "dialog-information",
+                    )
+                    self._speak_filler(random.choice(phrases))
+                else:
+                    self._speak_filler(random.choice(phrases))
 
         t = threading.Thread(target=loop, daemon=True)
         t.start()
         return t
 
     def _execute(self, query: str) -> tuple[str | None, str | None]:
+        timeout = (
+            config.OPENCODE_TIMEOUT_CODING if _is_coding_query(query) else config.OPENCODE_TIMEOUT
+        )
+        log.info("OpenCode timeout: %.0fs (coding=%s)", timeout, _is_coding_query(query))
+
         cmd = [
             "opencode",
             "run",
@@ -151,10 +201,11 @@ class OpenCodeBackend:
         notify.play_beep(config.BEEP_PROCESS_WAV)
 
         stop_filler = threading.Event()
-        filler_thread = self._start_filler_loop(proc, stop_filler)
+        start_time = time.time()
+        filler_thread = self._start_filler_loop(proc, stop_filler, start_time)
 
         try:
-            stdout, stderr = proc.communicate(timeout=config.OPENCODE_TIMEOUT)
+            stdout, stderr = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             proc.kill()
             stop_filler.set()
@@ -217,7 +268,12 @@ class OpenCodeBackend:
         try:
             response, new_id = self._execute(payload)
         except subprocess.TimeoutExpired:
-            log.error("OpenCode timeout (%.0fs)", config.OPENCODE_TIMEOUT)
+            timeout_label = (
+                config.OPENCODE_TIMEOUT_CODING
+                if _is_coding_query(text)
+                else config.OPENCODE_TIMEOUT
+            )
+            log.error("OpenCode timeout (%.0fs)", timeout_label)
             return LLMResult(i18n.t("timeout_error"), new_session, False, time.time() - t0)
         except Exception as e:
             log.exception("OpenCode error: %s", e)

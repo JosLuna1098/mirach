@@ -54,7 +54,7 @@ RMS_SILENCE_THRESHOLD = _env_float("MIRACH_RMS_SILENCE", 0.005)
 # --- STT ---
 WHISPER_MODEL = _env("MIRACH_WHISPER_MODEL", "large-v3-turbo")
 WHISPER_DEVICE = _env("MIRACH_WHISPER_DEVICE", "cuda")
-WHISPER_COMPUTE = _env("MIRACH_WHISPER_COMPUTE", "float16")
+WHISPER_COMPUTE = _env("MIRACH_WHISPER_COMPUTE", "int8")
 WHISPER_LANG = _env("MIRACH_WHISPER_LANG", "es")
 WHISPER_BEAM_SIZE = _env_int("MIRACH_WHISPER_BEAM_SIZE", 3)  # 1-5 (lower = faster)
 
@@ -66,6 +66,40 @@ VOICE_SPEED = _env_float("MIRACH_VOICE_SPEED", 1.2)
 # --- LLM (OpenCode CLI) ---
 OPENCODE_MODEL = _env("MIRACH_OPENCODE_MODEL", "opencode/deepseek-v4-flash-free")
 OPENCODE_TIMEOUT = _env_float("MIRACH_OPENCODE_TIMEOUT", 120.0)
+OPENCODE_TIMEOUT_CODING = _env_float("MIRACH_OPENCODE_TIMEOUT_CODING", 300.0)  # 5 min
+CODING_KEYWORDS = [
+    "script",
+    "code",
+    "programa",
+    "funcion",
+    "function",
+    "clase",
+    "class",
+    "modulo",
+    "module",
+    "api",
+    "bug",
+    "debug",
+    "compilar",
+    "compile",
+    "build",
+    "test",
+    "implementar",
+    "implement",
+    "algoritmo",
+    "algorithm",
+    "python",
+    "javascript",
+    "rust",
+    "bash",
+    "shell",
+    "crear un",
+    "crea un",
+    "escribir un",
+    "write a",
+    "generar",
+    "generate",
+]
 SESSION_IDLE_TIMEOUT = _env_float("MIRACH_SESSION_IDLE_TIMEOUT", 3600.0)  # 1 hour
 
 # --- User feedback ---
