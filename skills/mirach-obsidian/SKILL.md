@@ -1,42 +1,38 @@
 ---
 name: mirach-obsidian
-description: Obsidian vault management for local memory. Reading and writing notes. Use when the user says "remember", "note", "save this", asks about their notes, or wants to recall personal information.
+description: Obsidian vault file operations. Reading, searching, and writing notes. Use when the user asks to read their notes, search within notes, or manage vault files. For persistent memory rules, see mirach-memory skill.
 ---
 
-# Obsidian Notes (Local Memory)
+# Obsidian Notes
 
-The user's Obsidian vault serves as local persistent memory for the assistant.
-
-## Vault location
-
-The vault is located at: `{{obsidian_vault}}`
+The user's Obsidian vault is at: `{{obsidian_vault}}`
 
 ## Standard note files
-
-The following files are commonly used for structured memory:
 
 | File | Purpose |
 |---|---|
 | `preferencias.md` | User preferences, likes, habits |
 | `proyectos.md` | Active and past projects |
 | `recordatorios.md` | Reminders and to-do items |
-| `conocimiento.md` | Knowledge base, learned facts |
+| `conocimiento.md` | Knowledge base, learned facts, persistent instructions |
 
 ## Rules
 
-- **"remember X" / "note Y" / "save this"**: Write to the appropriate file in the vault.
-- **Before answering personal questions**: Check the vault files first.
 - **Reading notes**: Execute directly without asking.
 - **Writing notes**: Execute directly for simple additions. If the user wants to overwrite or delete content, confirm first.
+- **Before answering personal questions**: Check the vault files first.
 
 ## Writing format
 
 Append to the appropriate file using standard markdown. Keep entries concise.
 
-Example for adding a reminder:
 ```bash
 echo "- [ ] New reminder text" >> {{obsidian_vault}}/recordatorios.md
 ```
+
+## Persistent memory
+
+For rules about **when** and **what** to save as persistent memory across sessions, see the `mirach-memory` skill. This skill handles the file operations; `mirach-memory` handles the decision logic.
 
 ## If vault doesn't exist
 

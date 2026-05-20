@@ -163,6 +163,20 @@ else
     ok "system_prompt.md already present (left untouched)"
 fi
 
+# --- 5a. Obsidian vault memory files ---
+DEFAULT_VAULT="$HOME/ObsidianVault"
+if [[ -d "$DEFAULT_VAULT" ]]; then
+    for f in conocimiento.md recordatorios.md preferencias.md proyectos.md; do
+        if [[ ! -f "$DEFAULT_VAULT/$f" ]]; then
+            echo "# $f" > "$DEFAULT_VAULT/$f"
+            ok "Created $DEFAULT_VAULT/$f"
+        fi
+    done
+    ok "Vault memory files checked"
+else
+    ok "No Obsidian vault found at $DEFAULT_VAULT — skipping memory files"
+fi
+
 # --- 5b. OpenCode skills ---
 OPENCODE_SKILLS_DIR="$HOME/.config/opencode/skills"
 SKILLS_SRC="$REPO_DIR/skills"

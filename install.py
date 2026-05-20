@@ -272,6 +272,7 @@ def step_obsidian(total: int) -> dict:
 
     if vault_path.exists():
         ok(f"Vault encontrado: {vault_path}")
+        _init_vault_files(vault_path)
     else:
         warn(f"El directorio {vault_path} no existe — se creará cuando Obsidian lo use.")
 
@@ -295,6 +296,28 @@ def step_obsidian(total: int) -> dict:
             warn("Instala Obsidian manualmente desde https://obsidian.md cuando quieras.")
 
     return {"obsidian_vault": str(vault_path)}
+
+
+VAULT_FILES = {
+    "conocimiento.md": "# Conocimiento\n\nInstrucciones persistentes y reglas para el asistente.\n",
+    "recordatorios.md": "# Recordatorios\n\n- [ ] Tareas pendientes aparecerán aquí.\n",
+    "preferencias.md": "# Preferencias\n\nPreferencias y hábitos del usuario.\n",
+    "proyectos.md": "# Proyectos\n\nProyectos activos y su estado.\n",
+}
+
+
+def _init_vault_files(vault_path: Path) -> None:
+    """Create standard vault memory files if they don't exist."""
+    created = 0
+    for filename, content in VAULT_FILES.items():
+        target = vault_path / filename
+        if not target.exists():
+            target.write_text(content)
+            created += 1
+    if created:
+        ok(f"{created} archivos de memoria creados en el vault")
+    else:
+        ok("Archivos de memoria del vault ya existen")
 
 
 def _normalize_mods(raw: str) -> str:
