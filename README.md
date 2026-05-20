@@ -269,6 +269,10 @@ Mirach uses `notify-send`. Make sure you have a notification daemon
   hotkey, recording lives in RAM, transcripts stay on your disk.
 - **Hackability.** It's ~800 lines of Python you can read in one sitting.
 
+## Inspiration
+
+This project was inspired by Nate Gentile's video [Mi PC Linux ahora trabaja por mí (CachyOS + IA)](https://www.youtube.com/watch?v=b6uQTR7E9qg).
+
 ## License
 
 MIT.

@@ -19,7 +19,7 @@ cat ~/mirach/logs/conversations/latest.md
 ls ~/mirach/logs/conversations/
 
 # Specific conversation
-cat ~/mirach/logs/conversations/conversation_2025-01-15_14-30-00.md
+cat ~/mirach/logs/conversations/conversation_2026-01-15_14-30-00.md
 ```
 
 Each session creates a new timestamped file. `latest.md` is a symlink to the most recent one.
@@ -39,7 +39,7 @@ tail -f ~/mirach/logs/daemon.log
 Markdown files use this structure:
 
 ```markdown
-# Conversation 2025-01-15_14-30-00
+# Conversation 2026-01-15_14-30-00
 
 ## You said (14:30:05)
 

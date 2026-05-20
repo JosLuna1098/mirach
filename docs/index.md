@@ -55,3 +55,7 @@ This documentation follows the [Diátaxis framework](https://diataxis.fr/):
 - Follow the [Get Started tutorial](tutorial/get-started.md) to install and configure Mirach
 - Read the [architecture explanation](explanation/design-decisions.md) to understand the design
 - Browse the [configuration reference](reference/configuration.md) to tune every knob
+
+## Inspiration
+
+This project was inspired by Nate Gentile's video [Mi PC Linux ahora trabaja por mí (CachyOS + IA)](https://www.youtube.com/watch?v=b6uQTR7E9qg).
