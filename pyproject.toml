@@ -13,8 +13,8 @@ authors = [{ name = "josluna" }]
 dependencies = [
     "faster-whisper>=1.2.1,<2.0",
     "piper-tts>=1.4.2,<2.0",
-    "sounddevice>=0.5,<1.0",
-    "numpy>=1.26,<3.0",
+    "sounddevice>=0.5.5,<1.0",
+    "numpy>=2.4.6,<3.0",
 ]
 
 [project.optional-dependencies]
@@ -24,7 +24,7 @@ dev = [
 ]
 quality = [
     # Anti-aliased downsampling. Falls back to a boxcar filter without scipy.
-    "scipy>=1.11",
+    "scipy>=1.17.1",
 ]
 
 [project.scripts]
