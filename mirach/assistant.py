@@ -36,6 +36,7 @@ from mirach.tts import PiperSpeaker
 
 class State(Enum):
     """FSM states for the assistant pipeline."""
+
     IDLE = auto()
     RECORDING = auto()
     PROCESSING = auto()
@@ -48,6 +49,7 @@ class _Interrupted(Exception):
 @dataclass
 class UserScript:
     """A user-defined voice-triggered script parsed from user_scripts/."""
+
     path: Path
     triggers: list[str]
     response: str

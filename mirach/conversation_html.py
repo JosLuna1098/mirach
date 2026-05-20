@@ -95,10 +95,7 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
 def _escape_html(text: str) -> str:
     """Escape special HTML characters to prevent injection."""
     return (
-        text.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
+        text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
     )
 
 

@@ -22,6 +22,7 @@ from mirach.logging_setup import log
 # Optional: scipy provides higher-quality resampling. Falls back to boxcar filter.
 try:
     from scipy.signal import resample_poly  # type: ignore
+
     _HAS_SCIPY = True
 except ImportError:
     _HAS_SCIPY = False

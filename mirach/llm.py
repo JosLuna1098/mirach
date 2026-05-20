@@ -31,15 +31,17 @@ from mirach.logging_setup import log
 @dataclass(slots=True)
 class LLMResult:
     """Outcome of a single LLM query."""
-    response: str       # cleaned text ready for TTS, or "" if interrupted
-    new_session: bool   # was this the first turn of a fresh OpenCode session?
-    interrupted: bool   # did the user abort mid-query?
-    elapsed: float      # seconds spent waiting for OpenCode
+
+    response: str  # cleaned text ready for TTS, or "" if interrupted
+    new_session: bool  # was this the first turn of a fresh OpenCode session?
+    interrupted: bool  # did the user abort mid-query?
+    elapsed: float  # seconds spent waiting for OpenCode
 
 
 @runtime_checkable
 class LLMBackend(Protocol):
     """Structural protocol for LLM backends. Swap by passing a different adapter to Assistant."""
+
     def query(self, text: str, system_prompt: str, obsidian_context: str = "") -> LLMResult: ...
     def interrupt(self) -> None: ...
     def session_expired(self) -> bool: ...
@@ -191,9 +193,12 @@ class OpenCodeBackend:
         log.info("OpenCode timeout: %.0fs (coding=%s)", timeout, coding)
 
         cmd = [
-            "opencode", "run",
-            "--model", config.OPENCODE_MODEL,
-            "--format", "json",
+            "opencode",
+            "run",
+            "--model",
+            config.OPENCODE_MODEL,
+            "--format",
+            "json",
             "--dangerously-skip-permissions",
         ]
         if self._session_id:

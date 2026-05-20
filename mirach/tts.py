@@ -38,7 +38,7 @@ class PiperSpeaker:
         self._voice: PiperVoice | None = None
         self._sample_rate: int = 22050
         self._stream: sd.OutputStream | None = None
-        self._stream_lock = threading.Lock()   # protects _stream assignment/abort
+        self._stream_lock = threading.Lock()  # protects _stream assignment/abort
         self._playback_lock = threading.Lock()  # serializes speak() calls
         self._filler_cache: dict[str, str] = {}  # phrase → temp WAV path
 
@@ -57,8 +57,7 @@ class PiperSpeaker:
             assert self._voice is not None, "Piper not loaded"
             syn_config = SynthesisConfig(length_scale=config.VOICE_SPEED)
             chunks = (
-                c.audio_int16_bytes
-                for c in self._voice.synthesize(text, syn_config=syn_config)
+                c.audio_int16_bytes for c in self._voice.synthesize(text, syn_config=syn_config)
             )
             self._play_stream(chunks, self._sample_rate)
 

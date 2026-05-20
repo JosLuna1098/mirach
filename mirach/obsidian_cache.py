@@ -14,9 +14,9 @@ from mirach.logging_setup import log
 
 # Vault files that contain persistent memory. Loaded at session start.
 MEMORY_FILES = [
-    "conocimiento.md",      # Persistent instructions and rules
-    "recordatorios.md",     # Pending tasks and reminders
-    "preferencias.md",      # User preferences and habits
+    "conocimiento.md",  # Persistent instructions and rules
+    "recordatorios.md",  # Pending tasks and reminders
+    "preferencias.md",  # User preferences and habits
 ]
 
 
