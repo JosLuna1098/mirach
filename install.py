@@ -29,6 +29,9 @@ from pathlib import Path
 REPO_DIR = Path(__file__).parent.resolve()
 VENV_DIR = REPO_DIR / "venv"
 VOICES_DIR = REPO_DIR / "voices"
+SKILLS_SRC = REPO_DIR / "skills"
+OPENCODE_SKILLS_DIR = Path.home() / ".config" / "opencode" / "skills"
+OPENCODE_CONFIG = Path.home() / ".config" / "opencode" / "opencode.json"
 
 PIPER_VOICES: list[tuple[str, str, str]] = [
     # (display, filename, hf_url)
@@ -492,7 +495,7 @@ def _print_manual(env: str, mods: str, key: str, display: str, trigger_cmd: str)
 
 
 def step_hotkey(total: int) -> dict:
-    banner(4, total, "Atajo de teclado")
+    banner(12, total, "Atajo de teclado")
 
     print("  Mirach se activa con un atajo global. Configura el tuyo (default: Alt+Z).")
     print("  Modificadores: ALT, SUPER, CTRL, SHIFT (combina con espacios o '+').")
@@ -533,7 +536,7 @@ def step_hotkey(total: int) -> dict:
 
 
 def step_voice(total: int) -> tuple[str, str]:
-    banner(5, total, "Voz Piper")
+    banner(7, total, "Voz Piper")
 
     VOICES_DIR.mkdir(exist_ok=True)
 
@@ -560,7 +563,7 @@ def step_voice(total: int) -> tuple[str, str]:
 
 
 def step_venv(detected: dict, voice_name: str, total: int) -> None:
-    banner(6, total, "Entorno Python")
+    banner(8, total, "Entorno Python")
 
     # Create venv if needed
     if not VENV_DIR.exists():
@@ -586,7 +589,7 @@ def step_venv(detected: dict, voice_name: str, total: int) -> None:
 
 
 def step_opencode(total: int) -> None:
-    banner(7, total, "OpenCode CLI (LLM backend)")
+    banner(9, total, "OpenCode CLI (LLM backend)")
 
     if shutil.which("opencode"):
         try:
@@ -608,7 +611,7 @@ def step_opencode(total: int) -> None:
 
 
 def step_prompt(tvars: dict, total: int) -> None:
-    banner(8, total, "System prompt")
+    banner(11, total, "System prompt")
 
     dest = REPO_DIR / "system_prompt.md"
     if dest.exists():
@@ -629,7 +632,7 @@ def step_prompt(tvars: dict, total: int) -> None:
 
 
 def step_service(tvars: dict, total: int) -> None:
-    banner(9, total, "Servicio systemd")
+    banner(13, total, "Servicio systemd")
 
     if platform.system() != "Linux" or not shutil.which("systemctl"):
         warn("systemd no disponible — el daemon deberá iniciarse manualmente con ./run_daemon.sh")
@@ -700,6 +703,174 @@ def step_service(tvars: dict, total: int) -> None:
         ok("Daemon iniciado")
 
 
+# ── user context step ─────────────────────────────────────────────────────────
+
+
+def step_user_context(total: int) -> dict:
+    banner(4, total, "Contexto del usuario")
+
+    country = ask("País", "Ecuador")
+
+    hardware = ask(
+        "Especificaciones de hardware (CPU, GPU, RAM)",
+        "Intel i5-14600K, NVIDIA RTX 5070 Ti, 32 GB RAM DDR4",
+    )
+
+    terminals = ["ghostty", "alacritty", "kitty", "foot", "gnome-terminal"]
+    terminal_idx = menu("Terminal predeterminada:", terminals, default=1)
+    terminal = terminals[terminal_idx - 1]
+
+    music_players = [
+        ("YouTube Music (navegador)", "uwsm-app -- chromium --app=https://music.youtube.com"),
+        ("Spotify (navegador)", "uwsm-app -- chromium --app=https://open.spotify.com"),
+        ("Spotify (native)", "uwsm-app -- spotify"),
+        ("Local files", "uwsm-app -- clementine"),
+    ]
+    music_idx = menu("Reproductor de música:", [p[0] for p in music_players], default=1)
+    music_player_cmd = music_players[music_idx - 1][1]
+
+    return {
+        "country": country,
+        "hardware_spec": hardware,
+        "terminal": terminal,
+        "music_player": music_player_cmd,
+    }
+
+
+# ── capability selection ──────────────────────────────────────────────────────
+
+ALL_CAPABILITIES = [
+    ("mirach-core", "Core identity & TTS rules", True),
+    ("mirach-user-context", "User context (OS, hardware, country)", True),
+    ("mirach-apps", "Opening applications", True),
+    ("mirach-web-search", "Web search (DuckDuckGo)", True),
+    ("mirach-omarchy", "Omarchy/Hyprland management", True),
+    ("mirach-obsidian", "Obsidian notes (local memory)", True),
+    ("mirach-hardware", "Hardware status (GPU, temps, OC)", True),
+    ("mirach-system-monitor", "System monitoring (btop, htop, free)", True),
+    ("mirach-media-control", "Media control (volume, playback)", True),
+    ("mirach-git", "Git operations", True),
+    ("mirach-network", "Network (WiFi, Bluetooth)", True),
+    ("mirach-files", "File operations (find, open, search)", True),
+    ("mirach-quick-actions", "Quick actions (lock, screenshot, power)", True),
+]
+
+
+def step_capabilities(total: int) -> list[str]:
+    banner(5, total, "Selecciona capacidades")
+
+    print("  ¿Qué capacidades quieres activar? (números separados por coma, o Enter para todas)")
+    print()
+
+    for i, (name, desc, _) in enumerate(ALL_CAPABILITIES, 1):
+        marker = green("▶")
+        print(f"    {marker} ({i:2d}) {name:25s} — {desc}")
+
+    print()
+
+    if ASSUME_YES:
+        ok("Todas las capacidades activadas (modo --yes)")
+        return [name for name, _, _ in ALL_CAPABILITIES]
+
+    try:
+        raw = input("  Capacidades [all]: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        sys.exit(0)
+
+    if not raw or raw.lower() in ("all", "todas", "todo"):
+        return [name for name, _, _ in ALL_CAPABILITIES]
+
+    selected: list[str] = []
+    for token in raw.replace(",", " ").split():
+        try:
+            idx = int(token) - 1
+            if 0 <= idx < len(ALL_CAPABILITIES):
+                selected.append(ALL_CAPABILITIES[idx][0])
+        except ValueError:
+            pass
+
+    if not selected:
+        warn("Ninguna selección válida — activando todas")
+        return [name for name, _, _ in ALL_CAPABILITIES]
+
+    ok(f"{len(selected)} capacidades seleccionadas")
+    return selected
+
+
+# ── skills installation ──────────────────────────────────────────────────────
+
+
+def _inject_variables(content: str, tvars: dict) -> str:
+    """Replace {{variable}} placeholders with values from tvars."""
+    for key, value in tvars.items():
+        content = content.replace("{{" + key + "}}", str(value))
+    return content
+
+
+def _update_opencode_config(skills_path: str) -> None:
+    """Add or update skills.paths in the user's opencode.json."""
+    import json
+
+    OPENCODE_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+
+    if OPENCODE_CONFIG.exists():
+        try:
+            cfg = json.loads(OPENCODE_CONFIG.read_text())
+        except (json.JSONDecodeError, OSError):
+            cfg = {}
+    else:
+        cfg = {"$schema": "https://opencode.ai/config.json"}
+
+    if "skills" not in cfg:
+        cfg["skills"] = {}
+    if "paths" not in cfg["skills"]:
+        cfg["skills"]["paths"] = []
+
+    if skills_path not in cfg["skills"]["paths"]:
+        cfg["skills"]["paths"].append(skills_path)
+
+    OPENCODE_CONFIG.write_text(json.dumps(cfg, indent=2) + "\n")
+    ok(f"opencode.json actualizado con skills path: {skills_path}")
+
+
+def step_skills(tvars: dict, selected: list[str], total: int) -> None:
+    banner(10, total, "Instalando skills de OpenCode")
+
+    if not SKILLS_SRC.is_dir():
+        warn("Directorio de skills no encontrado — omitiendo")
+        return
+
+    OPENCODE_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+
+    installed = 0
+    for skill_name in selected:
+        src = SKILLS_SRC / skill_name
+        if not src.is_dir():
+            warn(f"Skill {skill_name} no encontrada en {SKILLS_SRC}")
+            continue
+
+        dest = OPENCODE_SKILLS_DIR / skill_name
+        dest.mkdir(parents=True, exist_ok=True)
+
+        skill_file = src / "SKILL.md"
+        if not skill_file.exists():
+            warn(f"SKILL.md no encontrada en {src}")
+            continue
+
+        content = skill_file.read_text()
+        content = _inject_variables(content, tvars)
+        (dest / "SKILL.md").write_text(content)
+        ok(f"Skill instalada: {skill_name}")
+        installed += 1
+
+    if installed > 0:
+        _update_opencode_config(str(OPENCODE_SKILLS_DIR))
+        ok(f"{installed} skills instaladas en {OPENCODE_SKILLS_DIR}")
+    else:
+        warn("No se instalaron skills")
+
+
 # ── summary ───────────────────────────────────────────────────────────────────
 
 
@@ -713,6 +884,7 @@ def print_summary(tvars: dict) -> None:
     print(bold("Próximos pasos:"))
     print(f"  • Habla con {name}:       pulsa {hotkey}")
     print(f"  • Editar prompt:          $EDITOR {REPO_DIR / 'system_prompt.md'}")
+    print(f"  • Skills instaladas:      {OPENCODE_SKILLS_DIR}/")
     print("  • Ver logs en vivo:       journalctl --user -u mirach -f")
     print(f"  • Ver última conv.:       {REPO_DIR / 'view_conversation.sh'}")
     if not shutil.which("opencode"):
@@ -735,7 +907,7 @@ def main() -> None:
         err(f"Python 3.11+ required (got {sys.version})")
         sys.exit(1)
 
-    TOTAL = 9
+    TOTAL = 13
 
     print()
     print("╔══════════════════════════════════╗")
@@ -747,12 +919,15 @@ def main() -> None:
         tvars.update(step_detect(TOTAL))
         tvars.update(step_config(tvars, TOTAL))
         tvars.update(step_obsidian(TOTAL))
-        tvars.update(step_hotkey(TOTAL))
+        tvars.update(step_user_context(TOTAL))
+        selected = step_capabilities(TOTAL)
         voice_name, _ = step_voice(TOTAL)
         tvars["voice_name"] = voice_name
         step_venv(tvars, voice_name, TOTAL)
         step_opencode(TOTAL)
+        step_skills(tvars, selected, TOTAL)
         step_prompt(tvars, TOTAL)
+        step_hotkey(TOTAL)
         step_service(tvars, TOTAL)
         print_summary(tvars)
     except KeyboardInterrupt:

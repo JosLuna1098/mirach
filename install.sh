@@ -163,6 +163,46 @@ else
     ok "system_prompt.md already present (left untouched)"
 fi
 
+# --- 5b. OpenCode skills ---
+OPENCODE_SKILLS_DIR="$HOME/.config/opencode/skills"
+SKILLS_SRC="$REPO_DIR/skills"
+
+if [[ -d "$SKILLS_SRC" ]]; then
+    log "Installing OpenCode skills"
+    mkdir -p "$OPENCODE_SKILLS_DIR"
+
+    for skill_dir in "$SKILLS_SRC"/*/; do
+        skill_name="$(basename "$skill_dir")"
+        if [[ -f "$skill_dir/SKILL.md" ]]; then
+            dest="$OPENCODE_SKILLS_DIR/$skill_name"
+            mkdir -p "$dest"
+            cp "$skill_dir/SKILL.md" "$dest/SKILL.md"
+            ok "Skill copied: $skill_name"
+        fi
+    done
+
+    # Update opencode.json with skills path if not already present
+    OPENCODE_CONFIG="$HOME/.config/opencode/opencode.json"
+    if command -v python3 >/dev/null; then
+        python3 -c "
+import json, sys
+cfg_path = '$OPENCODE_CONFIG'
+try:
+    cfg = json.loads(open(cfg_path).read())
+except (FileNotFoundError, json.JSONDecodeError):
+    cfg = {'\$schema': 'https://opencode.ai/config.json'}
+cfg.setdefault('skills', {})
+paths = cfg['skills'].setdefault('paths', [])
+p = '$OPENCODE_SKILLS_DIR'
+if p not in paths:
+    paths.append(p)
+json.dump(cfg, open(cfg_path, 'w'), indent=2)
+" 2>/dev/null && ok "opencode.json updated with skills path" || warn "Could not update opencode.json"
+    fi
+else
+    ok "No skills directory found — skipping"
+fi
+
 # --- 6. OpenCode CLI ---
 if [[ "$INSTALL_OPENCODE" == 1 ]]; then
     if command -v opencode >/dev/null; then
