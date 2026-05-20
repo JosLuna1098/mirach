@@ -933,8 +933,8 @@ def print_summary(tvars: dict) -> None:
     print(f"  • Talk to {name}:       press {hotkey}")
     print(f"  • Edit prompt:          $EDITOR {REPO_DIR / 'system_prompt.md'}")
     print(f"  • Installed skills:     {OPENCODE_SKILLS_DIR}/")
+    print(f"  • User scripts:         {USER_SCRIPTS_DIR}/")
     print("  • Watch logs live:      journalctl --user -u mirach -f")
-    print(f"  • View last conv.:      {REPO_DIR / 'view_conversation.sh'}")
     if not shutil.which("opencode"):
         print(yellow("\n  ⚠  Remember to install OpenCode and run 'opencode auth'."))
     print()

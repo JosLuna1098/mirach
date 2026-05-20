@@ -21,6 +21,7 @@ from pathlib import Path
 from mirach import config, i18n, notify
 from mirach.audio import AudioRecorder
 from mirach.conversation import ConversationLog
+from mirach.conversation_html import generate_and_open as show_conversation_html
 from mirach.ipc import SocketServer
 from mirach.llm import LLMBackend, OpenCodeBackend
 from mirach.logging_setup import log
@@ -47,6 +48,27 @@ class UserScript:
     triggers: list[str]
     response: str
     description: str = ""
+
+
+# Built-in triggers that bypass the LLM.
+# Keys are trigger phrases (lowercase), values are (response_key, handler).
+# Response key maps to i18n.t(); handler is called with transcribed text.
+BUILTIN_TRIGGERS: dict[str, tuple[str, str]] = {
+    # Show conversation — Spanish
+    "muéstrame la conversación": ("conversation_shown", "conversation"),
+    "ver conversación": ("conversation_shown", "conversation"),
+    "muestra la conversación": ("conversation_shown", "conversation"),
+    "lee la conversación": ("conversation_shown", "conversation"),
+    "ver la conversación": ("conversation_shown", "conversation"),
+    "mostrar conversación": ("conversation_shown", "conversation"),
+    # Show conversation — English
+    "show conversation": ("conversation_shown", "conversation"),
+    "show the conversation": ("conversation_shown", "conversation"),
+    "read conversation": ("conversation_shown", "conversation"),
+    "read the conversation": ("conversation_shown", "conversation"),
+    "view conversation": ("conversation_shown", "conversation"),
+    "view the conversation": ("conversation_shown", "conversation"),
+}
 
 
 class Assistant:
@@ -158,6 +180,14 @@ class Assistant:
                     return script
         return None
 
+    def _match_builtin_trigger(self, text: str) -> tuple[str, str] | None:
+        """Check if transcribed text matches a built-in trigger."""
+        lower = text.lower()
+        for phrase, (response_key, handler) in BUILTIN_TRIGGERS.items():
+            if phrase in lower:
+                return response_key, handler
+        return None
+
     # --- Main pipeline ---
     def _process(self) -> None:
         started = time.time()
@@ -178,6 +208,21 @@ class Assistant:
             self._check_interrupted()
             notify.notify(i18n.t("you_said"), text)
 
+            # Check built-in triggers first
+            builtin = self._match_builtin_trigger(text)
+            if builtin:
+                response_key, handler = builtin
+                if handler == "conversation":
+                    path = show_conversation_html()
+                    if path:
+                        self._tts.speak(i18n.t(response_key))
+                        self._conv.append(i18n.t("assistant"), i18n.t(response_key))
+                    else:
+                        self._tts.speak(i18n.t("no_conversation"))
+                        self._conv.append(i18n.t("assistant"), "No conversation saved.")
+                return
+
+            # Check user scripts
             matched = self._match_user_script(text)
             if matched:
                 log.info("User script triggered: %s", matched.path.name)

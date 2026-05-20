@@ -36,6 +36,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "still_working": "Still working on it...",
         "complex_query": "This is taking a bit longer, still processing.",
         "process_failed": "Something went wrong processing your request. Try again.",
+        "conversation_shown": "Conversation opened in your browser.",
+        "no_conversation": "No conversation saved yet.",
     },
     "es": {
         "recording_start_title": "🎤 Escuchando...",
@@ -59,6 +61,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "still_working": "Sigo trabajando en ello...",
         "complex_query": "Esto está tomando un poco más, sigo procesando.",
         "process_failed": "Algo falló al procesar tu consulta. Intenta de nuevo.",
+        "conversation_shown": "Conversación abierta en tu navegador.",
+        "no_conversation": "No hay conversaciones guardadas aún.",
     },
 }
 

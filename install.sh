@@ -120,7 +120,7 @@ $PIPBIN install --upgrade pip >/dev/null
 ok "pip ready"
 
 log "Installing Python dependencies"
-$PIPBIN install -r "$REPO_DIR/requirements.txt"
+$PIPBIN install -e "$REPO_DIR" -q
 ok "Dependencies installed"
 
 # --- 3. Piper voice ---
