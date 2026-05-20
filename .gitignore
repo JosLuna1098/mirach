@@ -44,3 +44,8 @@ Thumbs.db
 
 # Claude Code project context (local only)
 CLAUDE.md
+
+# User scripts (local per-user, gitignored content)
+user_scripts/*.sh
+user_scripts/*.py
+!user_scripts/.gitkeep

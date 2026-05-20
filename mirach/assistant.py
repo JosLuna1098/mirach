@@ -8,13 +8,15 @@ from __future__ import annotations
 
 import atexit
 import contextlib
-import os
+import re
 import signal
 import subprocess
 import sys
 import threading
 import time
+from dataclasses import dataclass
 from enum import Enum, auto
+from pathlib import Path
 
 from mirach import config, i18n, notify
 from mirach.audio import AudioRecorder
@@ -37,35 +39,17 @@ class _Interrupted(Exception):
     """Raised by the pipeline when the user aborts the current run."""
 
 
+@dataclass
+class UserScript:
+    """A user-defined voice-triggered script."""
+
+    path: Path
+    triggers: list[str]
+    response: str
+    description: str = ""
+
+
 class Assistant:
-    RETURN_PATTERNS = [
-        "volví",
-        "he vuelto",
-        "estoy de vuelta",
-        "regresé",
-        "llegué",
-        "ya llegué",
-        "ya estoy aquí",
-        "ya volví",
-        "estoy aquí",
-    ]
-
-    STOP_PATTERNS = [
-        "silencio",
-        "detente",
-        "detén",
-        "detener",
-        "para la música",
-        "para el sonido",
-        "cállate",
-        "calla",
-        "suficiente",
-        "ya para",
-        "stop",
-        "cancela",
-        "cancelar",
-    ]
-
     def __init__(
         self,
         *,
@@ -87,6 +71,7 @@ class Assistant:
         self._conv = ConversationLog()
         self._system_prompt = ""
         self._obsidian = ObsidianCache(config.OBSIDIAN_VAULT)
+        self._user_scripts: list[UserScript] = []
 
     # --- State helpers ---
     def _set_state(self, new: State) -> None:
@@ -114,20 +99,64 @@ class Assistant:
                 "System prompt %s not found — assistant will run without instructions",
                 config.SYSTEM_PROMPT_PATH,
             )
+        self._user_scripts = self._load_user_scripts()
+        log.info("Loaded %d user scripts", len(self._user_scripts))
         # Warmup + filler cache so the first real turn is full speed.
         self._stt.warmup()
         self._tts.prebake_fillers(i18n.fillers())
 
-    # --- Pattern matching ---
+    # --- User scripts ---
     @staticmethod
-    def _is_return_greeting(text: str) -> bool:
-        t = text.lower().strip()
-        return any(p in t for p in Assistant.RETURN_PATTERNS)
+    def _parse_script_metadata(path: Path) -> UserScript | None:
+        """Parse # triggers: and # response: from the first lines of a script."""
+        triggers: list[str] = []
+        response = ""
+        description = ""
 
-    @staticmethod
-    def _is_stop_command(text: str) -> bool:
-        t = text.lower().strip()
-        return any(p in t for p in Assistant.STOP_PATTERNS)
+        with open(path) as f:
+            for line in f:
+                if line.startswith("#!"):
+                    continue
+                if not line.startswith("#"):
+                    break
+                m_triggers = re.match(r"#\s*triggers:\s*(.+)", line, re.IGNORECASE)
+                m_response = re.match(r"#\s*response:\s*(.+)", line, re.IGNORECASE)
+                m_desc = re.match(r"#\s*description:\s*(.+)", line, re.IGNORECASE)
+                if m_triggers:
+                    triggers = [t.strip().lower() for t in m_triggers.group(1).split(",")]
+                elif m_response:
+                    response = m_response.group(1).strip()
+                elif m_desc:
+                    description = m_desc.group(1).strip()
+
+        if not triggers or not response:
+            log.warning("Skipping %s: missing triggers or response", path.name)
+            return None
+
+        return UserScript(path=path, triggers=triggers, response=response, description=description)
+
+    def _load_user_scripts(self) -> list[UserScript]:
+        """Scan user_scripts/ directory and parse all valid scripts."""
+        scripts_dir = config.BASE_DIR / "user_scripts"
+        if not scripts_dir.is_dir():
+            return []
+
+        scripts: list[UserScript] = []
+        for entry in sorted(scripts_dir.iterdir()):
+            if entry.suffix in (".sh", ".py") and entry.name != ".gitkeep":
+                parsed = self._parse_script_metadata(entry)
+                if parsed:
+                    scripts.append(parsed)
+        return scripts
+
+    def _match_user_script(self, text: str) -> UserScript | None:
+        """Check if transcribed text matches any user script trigger."""
+        lower = text.lower()
+        for script in self._user_scripts:
+            for trigger in script.triggers:
+                if trigger in lower:
+                    return script
+        return None
 
     # --- Main pipeline ---
     def _process(self) -> None:
@@ -149,22 +178,15 @@ class Assistant:
             self._check_interrupted()
             notify.notify(i18n.t("you_said"), text)
 
-            if self._is_return_greeting(text):
+            matched = self._match_user_script(text)
+            if matched:
+                log.info("User script triggered: %s", matched.path.name)
                 subprocess.Popen(
-                    [os.path.expanduser("~/mirach/play_return_song.sh")],
+                    [str(matched.path)],
                     start_new_session=True,
                 )
-                self._tts.speak("¡Bienvenido de vuelta! Back in Black sonando.")
-                self._conv.append(i18n.t("assistant"), "¡Bienvenido de vuelta!")
-                return
-
-            if self._is_stop_command(text):
-                subprocess.run(
-                    ["pkill", "-f", "mirach_backinblack"],
-                    capture_output=True,
-                )
-                self._tts.speak("Listo, música detenida.")
-                self._conv.append(i18n.t("assistant"), "Música detenida por voz.")
+                self._tts.speak(matched.response)
+                self._conv.append(i18n.t("assistant"), matched.response)
                 return
 
             new_session = self._llm.session_expired()

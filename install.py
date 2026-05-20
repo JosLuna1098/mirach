@@ -30,6 +30,7 @@ REPO_DIR = Path(__file__).parent.resolve()
 VENV_DIR = REPO_DIR / "venv"
 VOICES_DIR = REPO_DIR / "voices"
 SKILLS_SRC = REPO_DIR / "skills"
+USER_SCRIPTS_DIR = REPO_DIR / "user_scripts"
 OPENCODE_SKILLS_DIR = Path.home() / ".config" / "opencode" / "skills"
 OPENCODE_CONFIG = Path.home() / ".config" / "opencode" / "opencode.json"
 
@@ -905,6 +906,19 @@ def step_skills(tvars: dict, selected: list[str], total: int) -> None:
         warn("No skills installed")
 
 
+# ── user scripts directory ────────────────────────────────────────────────────
+
+
+def step_user_scripts(total: int) -> None:
+    banner(11, total, "User scripts directory")
+
+    USER_SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
+    gitkeep = USER_SCRIPTS_DIR / ".gitkeep"
+    if not gitkeep.exists():
+        gitkeep.touch()
+    ok(f"User scripts directory ready: {USER_SCRIPTS_DIR}")
+
+
 # ── summary ───────────────────────────────────────────────────────────────────
 
 
@@ -941,7 +955,7 @@ def main() -> None:
         err(f"Python 3.11+ required (got {sys.version})")
         sys.exit(1)
 
-    TOTAL = 13
+    TOTAL = 14
 
     print()
     print("╔══════════════════════════════════╗")
@@ -961,6 +975,7 @@ def main() -> None:
         step_opencode(TOTAL)
         step_skills(tvars, selected, TOTAL)
         step_prompt(tvars, TOTAL)
+        step_user_scripts(TOTAL)
         step_hotkey(TOTAL)
         step_service(tvars, TOTAL)
         print_summary(tvars)
