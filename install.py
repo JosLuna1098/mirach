@@ -36,7 +36,7 @@ OPENCODE_CONFIG = Path.home() / ".config" / "opencode" / "opencode.json"
 PIPER_VOICES: list[tuple[str, str, str]] = [
     # (display, filename, hf_url)
     (
-        "Español — es_MX-ald-medium (recomendado)",
+        "Spanish — es_MX-ald-medium (recommended)",
         "es_MX-ald-medium.onnx",
         "https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_MX/ald/medium/es_MX-ald-medium.onnx",
     ),
@@ -53,7 +53,7 @@ PIPER_VOICES: list[tuple[str, str, str]] = [
 ]
 
 LANGUAGES = [
-    ("Español latinoamericano", "es"),
+    ("Latin American Spanish", "es"),
     ("English", "en"),
 ]
 
@@ -136,15 +136,15 @@ def menu(prompt: str, options: list[str], default: int = 1) -> int:
         print(f"    {marker} ({i}) {opt}")
     while True:
         try:
-            raw = input(f"  Opción [{default}]: ").strip()
+            raw = input(f"  Option [{default}]: ").strip()
             if not raw:
                 return default
             choice = int(raw)
             if 1 <= choice <= len(options):
                 return choice
-            warn(f"Ingresa un número entre 1 y {len(options)}")
+            warn(f"Enter a number between 1 and {len(options)}")
         except ValueError:
-            warn("Ingresa un número válido")
+            warn("Enter a valid number")
         except (EOFError, KeyboardInterrupt):
             print()
             sys.exit(0)
@@ -175,7 +175,7 @@ def run(*cmd: str, check: bool = True, capture: bool = False) -> subprocess.Comp
 
 def download(url: str, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
-    print(f"  Descargando {dest.name}…", end=" ", flush=True)
+    print(f"  Downloading {dest.name}…", end=" ", flush=True)
     try:
         urllib.request.urlretrieve(url, dest)
         print(green("✓"))
@@ -188,7 +188,7 @@ def download(url: str, dest: Path) -> None:
 
 
 def step_detect(total: int) -> dict:
-    banner(1, total, "Detectando tu sistema…")
+    banner(1, total, "Detecting your system…")
 
     uname = platform.uname()
     os_desc = f"{uname.system} ({uname.machine})"
@@ -228,9 +228,9 @@ def step_detect(total: int) -> dict:
 
     ok(f"OS:      {os_desc}")
     ok(
-        f"GPU:     {gpu_name + ' — CUDA disponible' if gpu == 'cuda' else 'No GPU — Whisper usará CPU (más lento)'}"
+        f"GPU:     {gpu_name + ' — CUDA available' if gpu == 'cuda' else 'No GPU — Whisper will use CPU (slower)'}"
     )
-    ok(f"Usuario: {username}")
+    ok(f"User:    {username}")
     ok(f"Shell:   {shell}")
     ok(f"Python:  {python_ver}")
 
@@ -245,12 +245,12 @@ def step_detect(total: int) -> dict:
 
 
 def step_config(detected: dict, total: int) -> dict:
-    banner(2, total, "Configuración del asistente")
+    banner(2, total, "Assistant configuration")
 
-    name = ask("Nombre del asistente", "Mirach")
+    name = ask("Assistant name", "Mirach")
 
     lang_idx = menu(
-        "Idioma de respuesta:",
+        "Response language:",
         [f"{lang} ({code})" for lang, code in LANGUAGES],
         default=1,
     )
@@ -264,17 +264,17 @@ def step_config(detected: dict, total: int) -> dict:
 
 
 def step_obsidian(total: int) -> dict:
-    banner(3, total, "Notas (Obsidian)")
+    banner(3, total, "Notes (Obsidian)")
 
     default_vault = str(Path.home() / "ObsidianVault")
-    vault = ask("¿Ruta del vault de Obsidian?", default_vault)
+    vault = ask("Obsidian vault path?", default_vault)
     vault_path = Path(vault).expanduser()
 
     if vault_path.exists():
-        ok(f"Vault encontrado: {vault_path}")
+        ok(f"Vault found: {vault_path}")
         _init_vault_files(vault_path)
     else:
-        warn(f"El directorio {vault_path} no existe — se creará cuando Obsidian lo use.")
+        warn(f"Directory {vault_path} does not exist — will be created when Obsidian uses it.")
 
     # Check / offer Obsidian install
     has_obsidian = (
@@ -286,23 +286,23 @@ def step_obsidian(total: int) -> dict:
     )
 
     if has_obsidian:
-        ok("Obsidian detectado")
+        ok("Obsidian detected")
     else:
-        warn("Obsidian no encontrado.")
-        if shutil.which("flatpak") and confirm("¿Instalar Obsidian vía Flatpak?", default=True):
+        warn("Obsidian not found.")
+        if shutil.which("flatpak") and confirm("Install Obsidian via Flatpak?", default=True):
             run("flatpak", "install", "-y", "flathub", "md.obsidian.Obsidian")
-            ok("Obsidian instalado")
+            ok("Obsidian installed")
         else:
-            warn("Instala Obsidian manualmente desde https://obsidian.md cuando quieras.")
+            warn("Install Obsidian manually from https://obsidian.md when ready.")
 
     return {"obsidian_vault": str(vault_path)}
 
 
 VAULT_FILES = {
-    "conocimiento.md": "# Conocimiento\n\nInstrucciones persistentes y reglas para el asistente.\n",
-    "recordatorios.md": "# Recordatorios\n\n- [ ] Tareas pendientes aparecerán aquí.\n",
-    "preferencias.md": "# Preferencias\n\nPreferencias y hábitos del usuario.\n",
-    "proyectos.md": "# Proyectos\n\nProyectos activos y su estado.\n",
+    "conocimiento.md": "# Knowledge\n\nPersistent instructions and rules for the assistant.\n",
+    "recordatorios.md": "# Reminders\n\n- [ ] Pending tasks will appear here.\n",
+    "preferencias.md": "# Preferences\n\nUser preferences and habits.\n",
+    "proyectos.md": "# Projects\n\nActive projects and their status.\n",
 }
 
 
@@ -315,9 +315,9 @@ def _init_vault_files(vault_path: Path) -> None:
             target.write_text(content)
             created += 1
     if created:
-        ok(f"{created} archivos de memoria creados en el vault")
+        ok(f"{created} memory files created in vault")
     else:
-        ok("Archivos de memoria del vault ya existen")
+        ok("Vault memory files already exist")
 
 
 def _normalize_mods(raw: str) -> str:
@@ -373,19 +373,19 @@ def _bind_hyprland(mods: str, key: str, display: str, trigger_cmd: str) -> None:
         "# Mirach hotkey — generated by install.py. Safe to edit or delete.\n"
         f"bind = {mods}, {key}, exec, {trigger_cmd}\n"
     )
-    ok(f"Bind Hyprland escrito: {target}")
+    ok(f"Hyprland bind written: {target}")
 
     if fallback:
-        warn("Añade esta línea a ~/.config/hypr/hyprland.conf para activarlo:")
+        warn("Add this line to ~/.config/hypr/hyprland.conf to activate:")
         warn(f"    source = {target}")
         return
 
     if shutil.which("hyprctl"):
         result = run("hyprctl", "reload", capture=True, check=False)
         if result.returncode == 0:
-            ok(f"Hyprland recargado — pulsa {display} para hablar")
+            ok(f"Hyprland reloaded — press {display} to talk")
         else:
-            warn("hyprctl reload falló — reinicia Hyprland o recarga manualmente.")
+            warn("hyprctl reload failed — restart Hyprland or reload manually.")
 
 
 def _sway_i3_modifiers(mods: str) -> str:
@@ -409,19 +409,19 @@ def _write_wm_include(wm: str, snippet: str, display: str, reload_cmd: list[str]
         used_fallback = True
 
     target.write_text(f"# Mirach hotkey — generated by install.py.\n{snippet}\n")
-    ok(f"Bind {wm} escrito: {target}")
+    ok(f"{wm} bind written: {target}")
 
     if used_fallback:
-        warn(f"Añade esta línea a ~/.config/{wm}/config para activarlo:")
+        warn(f"Add this line to ~/.config/{wm}/config to activate:")
         warn(f"    include {target}")
         return
 
     if shutil.which(reload_cmd[0]):
         result = run(*reload_cmd, capture=True, check=False)
         if result.returncode == 0:
-            ok(f"{wm} recargado — pulsa {display} para hablar")
+            ok(f"{wm} reloaded — press {display} to talk")
         else:
-            warn(f"{reload_cmd[0]} reload falló — recarga manualmente.")
+            warn(f"{reload_cmd[0]} reload failed — reload manually.")
 
 
 def _bind_sway(mods: str, key: str, display: str, trigger_cmd: str) -> None:
@@ -446,7 +446,7 @@ def _gnome_accelerator(mods: str, key: str) -> str:
 def _bind_gnome(mods: str, key: str, display: str, trigger_cmd: str) -> None:
     """Register a GNOME custom keybinding via gsettings (idempotent)."""
     if not shutil.which("gsettings"):
-        warn("gsettings no encontrado — no puedo configurar GNOME automáticamente.")
+        warn("gsettings not found — cannot configure GNOME automatically.")
         return
 
     schema = "org.gnome.settings-daemon.plugins.media-keys"
@@ -477,8 +477,8 @@ def _bind_gnome(mods: str, key: str, display: str, trigger_cmd: str) -> None:
     run("gsettings", "set", f"{custom_schema}:{key_path}", "command", trigger_cmd, check=False)
     run("gsettings", "set", f"{custom_schema}:{key_path}", "binding", accel, check=False)
 
-    ok(f"GNOME custom shortcut registrado — pulsa {display} para hablar")
-    print('    (visible en Settings > Keyboard > Custom Shortcuts → "Mirach")')
+    ok(f"GNOME custom shortcut registered — press {display} to talk")
+    print('    (visible in Settings > Keyboard > Custom Shortcuts → "Mirach")')
 
 
 # ── manual instructions for unsupported envs ──────────────────────────────────
@@ -487,9 +487,9 @@ def _bind_gnome(mods: str, key: str, display: str, trigger_cmd: str) -> None:
 def _print_manual(env: str, mods: str, key: str, display: str, trigger_cmd: str) -> None:
     """Print clear instructions for envs we don't auto-configure."""
     print()
-    print(f"  {bold('Configura el hotkey manualmente:')}")
-    print(f"    Atajo:    {display}")
-    print(f"    Comando:  {trigger_cmd}")
+    print(f"  {bold('Configure the hotkey manually:')}")
+    print(f"    Shortcut: {display}")
+    print(f"    Command:  {trigger_cmd}")
     print()
 
     if env == "plasma":
@@ -497,7 +497,7 @@ def _print_manual(env: str, mods: str, key: str, display: str, trigger_cmd: str)
         print(
             "    System Settings → Shortcuts → Custom Shortcuts → Edit → New → Global Shortcut → Command/URL"
         )
-        print(f"    Nombre: Mirach   Comando: {trigger_cmd}   Trigger: {display}")
+        print(f"    Name: Mirach   Command: {trigger_cmd}   Trigger: {display}")
     elif env == "xfce":
         print("  XFCE:")
         print("    Settings → Keyboard → Application Shortcuts → Add")
@@ -509,8 +509,8 @@ def _print_manual(env: str, mods: str, key: str, display: str, trigger_cmd: str)
         print("  Cinnamon:")
         print("    System Settings → Keyboard → Shortcuts → Custom Shortcuts → Add custom shortcut")
     else:
-        print("  Tu entorno no fue detectado. Configura el hotkey en los settings del DE,")
-        print("  o usa sxhkd / xbindkeys en X11 con una línea como:")
+        print("  Your environment was not detected. Configure the hotkey in DE settings,")
+        print("  or use sxhkd / xbindkeys on X11 with a line like:")
         print(f"    {display.lower().replace('+', ' + ')}  →  {trigger_cmd}")
 
 
@@ -518,19 +518,19 @@ def _print_manual(env: str, mods: str, key: str, display: str, trigger_cmd: str)
 
 
 def step_hotkey(total: int) -> dict:
-    banner(12, total, "Atajo de teclado")
+    banner(12, total, "Keyboard shortcut")
 
-    print("  Mirach se activa con un atajo global. Configura el tuyo (default: Alt+Z).")
-    print("  Modificadores: ALT, SUPER, CTRL, SHIFT (combina con espacios o '+').")
+    print("  Mirach is activated with a global shortcut. Configure yours (default: Alt+Z).")
+    print("  Modifiers: ALT, SUPER, CTRL, SHIFT (combine with spaces or '+').")
 
     while True:
-        mods_raw = ask("Modificador(es)", "ALT")
+        mods_raw = ask("Modifier(s)", "ALT")
         mods = _normalize_mods(mods_raw)
         if mods:
             break
-        warn("Modificador inválido. Usa ALT, SUPER, CTRL o SHIFT.")
+        warn("Invalid modifier. Use ALT, SUPER, CTRL or SHIFT.")
 
-    key = ask("Tecla", "Z").strip().upper() or "Z"
+    key = ask("Key", "Z").strip().upper() or "Z"
     display = "+".join([m.capitalize() for m in mods.split()] + [key])
     trigger_cmd = f"python3 {REPO_DIR / 'trigger.py'}"
 
@@ -546,69 +546,69 @@ def step_hotkey(total: int) -> dict:
 
     if env in handlers:
         name, fn = handlers[env]
-        if confirm(f"Detecté {name}. ¿Configurar el hotkey automáticamente?", default=True):
+        if confirm(f"Detected {name}. Configure hotkey automatically?", default=True):
             fn(mods, key, display, trigger_cmd)
         else:
             _print_manual(env, mods, key, display, trigger_cmd)
     else:
         if env != "other":
-            ok(f"Detecté: {env}")
+            ok(f"Detected: {env}")
         _print_manual(env, mods, key, display, trigger_cmd)
 
     return {"hotkey_display": display, "hotkey_mods": mods, "hotkey_key": key}
 
 
 def step_voice(total: int) -> tuple[str, str]:
-    banner(7, total, "Voz Piper")
+    banner(7, total, "Piper voice")
 
     VOICES_DIR.mkdir(exist_ok=True)
 
-    options = [label for label, _, _ in PIPER_VOICES] + ["Especificar URL manualmente"]
-    idx = menu("Elige una voz:", options, default=1)
+    options = [label for label, _, _ in PIPER_VOICES] + ["Specify URL manually"]
+    idx = menu("Choose a voice:", options, default=1)
 
     if idx <= len(PIPER_VOICES):
         label, voice_name, voice_url = PIPER_VOICES[idx - 1]
     else:
-        voice_url = ask("URL del archivo .onnx en Hugging Face")
+        voice_url = ask("URL of the .onnx file on Hugging Face")
         voice_name = voice_url.split("/")[-1]
 
     dest_onnx = VOICES_DIR / voice_name
     dest_json = VOICES_DIR / (voice_name + ".json")
 
     if dest_onnx.exists() and dest_json.exists():
-        ok(f"Voz ya descargada: {voice_name}")
+        ok(f"Voice already downloaded: {voice_name}")
     else:
         download(voice_url, dest_onnx)
         download(voice_url + ".json", dest_json)
-        ok(f"Voz lista: {voice_name}")
+        ok(f"Voice ready: {voice_name}")
 
     return voice_name, voice_url
 
 
 def step_venv(detected: dict, voice_name: str, total: int) -> None:
-    banner(8, total, "Entorno Python")
+    banner(8, total, "Python environment")
 
     # Create venv if needed
     if not VENV_DIR.exists():
         run(sys.executable, "-m", "venv", str(VENV_DIR))
-        ok("venv creado")
+        ok("venv created")
     else:
-        ok("venv ya existe")
+        ok("venv already exists")
 
     pybin = VENV_DIR / "bin" / "python3"
     pipbin = [str(pybin), "-m", "pip"]
 
     run(*pipbin, "install", "--upgrade", "pip", "-q")
-    ok("pip actualizado")
+    ok("pip updated")
 
     run(*pipbin, "install", "-e", str(REPO_DIR), "-q")
-    ok("Dependencias instaladas")
+    ok("Dependencies installed")
 
     if detected["gpu"] == "cuda":
         run(*pipbin, "install", "-q", "nvidia-cublas-cu12>=12.0", "nvidia-cudnn-cu12>=9.0")
-        ok("CUDA libs instaladas (cublas + cudnn)")
+        ok("CUDA libs installed (cublas + cudnn)")
     else:
-        ok("Sin GPU — omitiendo CUDA libs")
+        ok("No GPU — skipping CUDA libs")
 
 
 def step_opencode(total: int) -> None:
@@ -619,18 +619,18 @@ def step_opencode(total: int) -> None:
             ver = run("opencode", "--version", capture=True, check=False).stdout.strip()
         except Exception:
             ver = "?"
-        ok(f"OpenCode ya instalado ({ver})")
+        ok(f"OpenCode already installed ({ver})")
         return
 
-    if confirm("¿Instalar OpenCode CLI?", default=True):
+    if confirm("Install OpenCode CLI?", default=True):
         if shutil.which("curl"):
             run("bash", "-c", f"curl -fsSL {OPENCODE_INSTALL_URL} | bash")
-            ok("OpenCode instalado — ejecuta 'opencode auth' para configurar")
+            ok("OpenCode installed — run 'opencode auth' to configure")
         else:
-            warn("curl no encontrado. Instala OpenCode manualmente:")
+            warn("curl not found. Install OpenCode manually:")
             warn(f"  {OPENCODE_INSTALL_URL}")
     else:
-        warn("Instala OpenCode manualmente antes de iniciar el daemon.")
+        warn("Install OpenCode manually before starting the daemon.")
 
 
 def step_prompt(tvars: dict, total: int) -> None:
@@ -638,12 +638,12 @@ def step_prompt(tvars: dict, total: int) -> None:
 
     dest = REPO_DIR / "system_prompt.md"
     if dest.exists():
-        ok("system_prompt.md ya existe — no se sobreescribe")
+        ok("system_prompt.md already exists — not overwritten")
         return
 
     template_path = REPO_DIR / "system_prompt.example.md"
     if not template_path.exists():
-        warn("system_prompt.example.md no encontrado — omitiendo")
+        warn("system_prompt.example.md not found — skipping")
         return
 
     content = template_path.read_text()
@@ -651,14 +651,14 @@ def step_prompt(tvars: dict, total: int) -> None:
         content = content.replace("{{" + key + "}}", str(value))
 
     dest.write_text(content)
-    ok(f"system_prompt.md generado (edítalo en: {dest})")
+    ok(f"system_prompt.md generated (edit at: {dest})")
 
 
 def step_service(tvars: dict, total: int) -> None:
-    banner(13, total, "Servicio systemd")
+    banner(13, total, "systemd service")
 
     if platform.system() != "Linux" or not shutil.which("systemctl"):
-        warn("systemd no disponible — el daemon deberá iniciarse manualmente con ./run_daemon.sh")
+        warn("systemd not available — start daemon manually with ./run_daemon.sh")
         return
 
     service_dest = Path.home() / ".config" / "systemd" / "user" / "mirach.service"
@@ -703,9 +703,9 @@ def step_service(tvars: dict, total: int) -> None:
             )
 
         service_dest.write_text(content)
-        ok(f"mirach.service instalado → {service_dest}")
+        ok(f"mirach.service installed → {service_dest}")
     else:
-        ok("mirach.service ya existe — no se sobreescribe")
+        ok("mirach.service already exists — not overwritten")
 
     run("systemctl", "--user", "daemon-reload")
     run("systemctl", "--user", "enable", "mirach.service", capture=True, check=False)
@@ -720,36 +720,36 @@ def step_service(tvars: dict, total: int) -> None:
 
     if already_running:
         run("systemctl", "--user", "restart", "mirach.service")
-        ok("Daemon reiniciado")
+        ok("Daemon restarted")
     else:
         run("systemctl", "--user", "start", "mirach.service")
-        ok("Daemon iniciado")
+        ok("Daemon started")
 
 
 # ── user context step ─────────────────────────────────────────────────────────
 
 
 def step_user_context(total: int) -> dict:
-    banner(4, total, "Contexto del usuario")
+    banner(4, total, "User context")
 
-    country = ask("País", "Ecuador")
+    country = ask("Country", "Ecuador")
 
     hardware = ask(
-        "Especificaciones de hardware (CPU, GPU, RAM)",
+        "Hardware specs (CPU, GPU, RAM)",
         "Intel i5-14600K, NVIDIA RTX 5070 Ti, 32 GB RAM DDR4",
     )
 
     terminals = ["ghostty", "alacritty", "kitty", "foot", "gnome-terminal"]
-    terminal_idx = menu("Terminal predeterminada:", terminals, default=1)
+    terminal_idx = menu("Default terminal:", terminals, default=1)
     terminal = terminals[terminal_idx - 1]
 
     music_players = [
-        ("YouTube Music (navegador)", "uwsm-app -- chromium --app=https://music.youtube.com"),
-        ("Spotify (navegador)", "uwsm-app -- chromium --app=https://open.spotify.com"),
+        ("YouTube Music (browser)", "uwsm-app -- chromium --app=https://music.youtube.com"),
+        ("Spotify (browser)", "uwsm-app -- chromium --app=https://open.spotify.com"),
         ("Spotify (native)", "uwsm-app -- spotify"),
         ("Local files", "uwsm-app -- clementine"),
     ]
-    music_idx = menu("Reproductor de música:", [p[0] for p in music_players], default=1)
+    music_idx = menu("Music player:", [p[0] for p in music_players], default=1)
     music_player_cmd = music_players[music_idx - 1][1]
 
     return {
@@ -780,9 +780,9 @@ ALL_CAPABILITIES = [
 
 
 def step_capabilities(total: int) -> list[str]:
-    banner(5, total, "Selecciona capacidades")
+    banner(5, total, "Select capabilities")
 
-    print("  ¿Qué capacidades quieres activar? (números separados por coma, o Enter para todas)")
+    print("  Which capabilities do you want to enable? (comma-separated numbers, or Enter for all)")
     print()
 
     for i, (name, desc, _) in enumerate(ALL_CAPABILITIES, 1):
@@ -792,11 +792,11 @@ def step_capabilities(total: int) -> list[str]:
     print()
 
     if ASSUME_YES:
-        ok("Todas las capacidades activadas (modo --yes)")
+        ok("All capabilities enabled (--yes mode)")
         return [name for name, _, _ in ALL_CAPABILITIES]
 
     try:
-        raw = input("  Capacidades [all]: ").strip()
+        raw = input("  Capabilities [all]: ").strip()
     except (EOFError, KeyboardInterrupt):
         print()
         sys.exit(0)
@@ -814,10 +814,10 @@ def step_capabilities(total: int) -> list[str]:
             pass
 
     if not selected:
-        warn("Ninguna selección válida — activando todas")
+        warn("No valid selection — enabling all")
         return [name for name, _, _ in ALL_CAPABILITIES]
 
-    ok(f"{len(selected)} capacidades seleccionadas")
+    ok(f"{len(selected)} capabilities selected")
     return selected
 
 
@@ -854,14 +854,14 @@ def _update_opencode_config(skills_path: str) -> None:
         cfg["skills"]["paths"].append(skills_path)
 
     OPENCODE_CONFIG.write_text(json.dumps(cfg, indent=2) + "\n")
-    ok(f"opencode.json actualizado con skills path: {skills_path}")
+    ok(f"opencode.json updated with skills path: {skills_path}")
 
 
 def step_skills(tvars: dict, selected: list[str], total: int) -> None:
-    banner(10, total, "Instalando skills de OpenCode")
+    banner(10, total, "Installing OpenCode skills")
 
     if not SKILLS_SRC.is_dir():
-        warn("Directorio de skills no encontrado — omitiendo")
+        warn("Skills directory not found — skipping")
         return
 
     OPENCODE_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
@@ -870,7 +870,7 @@ def step_skills(tvars: dict, selected: list[str], total: int) -> None:
     for skill_name in selected:
         src = SKILLS_SRC / skill_name
         if not src.is_dir():
-            warn(f"Skill {skill_name} no encontrada en {SKILLS_SRC}")
+            warn(f"Skill {skill_name} not found in {SKILLS_SRC}")
             continue
 
         dest = OPENCODE_SKILLS_DIR / skill_name
@@ -878,20 +878,20 @@ def step_skills(tvars: dict, selected: list[str], total: int) -> None:
 
         skill_file = src / "SKILL.md"
         if not skill_file.exists():
-            warn(f"SKILL.md no encontrada en {src}")
+            warn(f"SKILL.md not found in {src}")
             continue
 
         content = skill_file.read_text()
         content = _inject_variables(content, tvars)
         (dest / "SKILL.md").write_text(content)
-        ok(f"Skill instalada: {skill_name}")
+        ok(f"Skill installed: {skill_name}")
         installed += 1
 
     if installed > 0:
         _update_opencode_config(str(OPENCODE_SKILLS_DIR))
-        ok(f"{installed} skills instaladas en {OPENCODE_SKILLS_DIR}")
+        ok(f"{installed} skills installed to {OPENCODE_SKILLS_DIR}")
     else:
-        warn("No se instalaron skills")
+        warn("No skills installed")
 
 
 # ── summary ───────────────────────────────────────────────────────────────────
@@ -900,18 +900,18 @@ def step_skills(tvars: dict, selected: list[str], total: int) -> None:
 def print_summary(tvars: dict) -> None:
     print()
     print("═" * 50)
-    print(green("✓  Instalación completa."))
+    print(green("✓  Installation complete."))
     print()
     name = tvars.get("assistant_name", "Mirach")
     hotkey = tvars.get("hotkey_display", "Alt+Z")
-    print(bold("Próximos pasos:"))
-    print(f"  • Habla con {name}:       pulsa {hotkey}")
-    print(f"  • Editar prompt:          $EDITOR {REPO_DIR / 'system_prompt.md'}")
-    print(f"  • Skills instaladas:      {OPENCODE_SKILLS_DIR}/")
-    print("  • Ver logs en vivo:       journalctl --user -u mirach -f")
-    print(f"  • Ver última conv.:       {REPO_DIR / 'view_conversation.sh'}")
+    print(bold("Next steps:"))
+    print(f"  • Talk to {name}:       press {hotkey}")
+    print(f"  • Edit prompt:          $EDITOR {REPO_DIR / 'system_prompt.md'}")
+    print(f"  • Installed skills:     {OPENCODE_SKILLS_DIR}/")
+    print("  • Watch logs live:      journalctl --user -u mirach -f")
+    print(f"  • View last conv.:      {REPO_DIR / 'view_conversation.sh'}")
     if not shutil.which("opencode"):
-        print(yellow("\n  ⚠  Recuerda instalar OpenCode y ejecutar 'opencode auth'."))
+        print(yellow("\n  ⚠  Remember to install OpenCode and run 'opencode auth'."))
     print()
 
 
@@ -954,10 +954,10 @@ def main() -> None:
         step_service(tvars, TOTAL)
         print_summary(tvars)
     except KeyboardInterrupt:
-        print(f"\n{yellow('Instalación cancelada.')}")
+        print(f"\n{yellow('Installation cancelled.')}")
         sys.exit(1)
     except Exception as e:
-        err(f"Error durante la instalación: {e}")
+        err(f"Error during installation: {e}")
         sys.exit(1)
 
 

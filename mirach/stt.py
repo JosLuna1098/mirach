@@ -84,6 +84,7 @@ class WhisperTranscriber:
         segments, _ = self._model.transcribe(
             audio_16k,
             language=config.WHISPER_LANG,
+            beam_size=config.WHISPER_BEAM_SIZE,
             condition_on_previous_text=False,
             vad_filter=True,
             vad_parameters={"min_silence_duration_ms": 300},

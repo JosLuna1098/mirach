@@ -7,8 +7,10 @@ for a cross-platform implementation later.
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
+import threading
 import wave
 
 import numpy as np
@@ -20,13 +22,18 @@ log = logging.getLogger("mirach")
 
 
 def notify(title: str, body: str, icon: str = "dialog-information") -> None:
+    """Send a desktop notification asynchronously (non-blocking)."""
     if not shutil.which("notify-send"):
         log.debug("notify-send unavailable — skipping: %s", title)
         return
-    subprocess.run(
-        ["notify-send", "-t", "4000", "-i", icon, title, body],
-        capture_output=True,
-    )
+
+    def _send() -> None:
+        subprocess.run(
+            ["notify-send", "-t", "4000", "-i", icon, title, body],
+            capture_output=True,
+        )
+
+    threading.Thread(target=_send, daemon=True).start()
 
 
 def _generate_beep_wav(
@@ -85,7 +92,7 @@ def generate_beeps() -> None:
 
 def play_beep(path: str, blocking: bool = False) -> None:
     """Play a beep WAV via sounddevice. Non-blocking by default; blocking for shutdown."""
-    if not path or not __import__("os").path.exists(path):
+    if not path or not os.path.exists(path):
         return
     try:
         with wave.open(path, "rb") as wf:

@@ -37,7 +37,7 @@ class LLMResult:
 class LLMBackend(Protocol):
     """Structural protocol for LLM backends. Swap by passing a different adapter to Assistant."""
 
-    def query(self, text: str, system_prompt: str) -> LLMResult: ...
+    def query(self, text: str, system_prompt: str, obsidian_context: str = "") -> LLMResult: ...
     def interrupt(self) -> None: ...
     def session_expired(self) -> bool: ...
     def reset_session(self) -> None: ...
@@ -188,7 +188,7 @@ class OpenCodeBackend:
 
         return " ".join(parts).strip(), new_id
 
-    def query(self, text: str, system_prompt: str) -> LLMResult:
+    def query(self, text: str, system_prompt: str, obsidian_context: str = "") -> LLMResult:
         """Run a single LLM turn. Returns LLMResult with `interrupted=True` if aborted."""
         t0 = time.time()
         new_session = self.session_expired()
@@ -196,9 +196,14 @@ class OpenCodeBackend:
             self.reset_session()
 
         if new_session and system_prompt:
+            context_block = ""
+            if obsidian_context:
+                context_block = (
+                    f"\n\n---\n\nRestored context from your memory:\n\n{obsidian_context}"
+                )
             payload = (
-                "Actúa según estas instrucciones para TODA esta conversación:\n\n"
-                f"{system_prompt}\n\n---\n\nPrimera consulta: {text}"
+                "Follow these instructions for the ENTIRE conversation:\n\n"
+                f"{system_prompt}{context_block}\n\n---\n\nFirst query: {text}"
             )
             log.info("New OpenCode session — system prompt injected")
         else:

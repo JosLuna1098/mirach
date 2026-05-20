@@ -20,6 +20,7 @@ from mirach.conversation import ConversationLog
 from mirach.ipc import SocketServer
 from mirach.llm import LLMBackend, OpenCodeBackend
 from mirach.logging_setup import log
+from mirach.obsidian_cache import ObsidianCache
 from mirach.stt import WhisperTranscriber
 from mirach.tts import PiperSpeaker
 
@@ -55,6 +56,7 @@ class Assistant:
         self._llm = llm or OpenCodeBackend(speak_filler=self._tts.speak_filler)
         self._conv = ConversationLog()
         self._system_prompt = ""
+        self._obsidian = ObsidianCache(config.OBSIDIAN_VAULT)
 
     # --- State helpers ---
     def _set_state(self, new: State) -> None:
@@ -106,11 +108,14 @@ class Assistant:
             self._check_interrupted()
             notify.notify(i18n.t("you_said"), text)
 
-            if self._llm.session_expired():
+            new_session = self._llm.session_expired()
+            if new_session:
                 self._conv.start()
+                self._obsidian.refresh()
             self._conv.append(i18n.t("you_said").rstrip(":"), text)
 
-            result = self._llm.query(text, self._system_prompt)
+            obsidian_context = self._obsidian.get_context() if new_session else ""
+            result = self._llm.query(text, self._system_prompt, obsidian_context)
             self._check_interrupted()
             if result.interrupted:
                 return

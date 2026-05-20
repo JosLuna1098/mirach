@@ -41,6 +41,10 @@ SOCKET_PATH = _env("MIRACH_SOCKET", os.path.join(_TMP, "mirach.sock"))
 CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache"))) / "mirach"
 SESSION_ID_PATH = CACHE_DIR / "session_id"
 
+# --- Obsidian vault ---
+OBSIDIAN_VAULT = Path(_env("MIRACH_OBSIDIAN_VAULT", str(Path.home() / "ObsidianVault")))
+OBSIDIAN_CACHE_MAX_AGE = _env_float("MIRACH_OBSIDIAN_CACHE_MAX_AGE", 300.0)  # 5 min
+
 # --- Audio ---
 MIC_NAME = _env("MIRACH_MIC", "fifine")
 SAMPLE_RATE = _env_int("MIRACH_SAMPLE_RATE", 48000)
@@ -52,6 +56,7 @@ WHISPER_MODEL = _env("MIRACH_WHISPER_MODEL", "large-v3-turbo")
 WHISPER_DEVICE = _env("MIRACH_WHISPER_DEVICE", "cuda")
 WHISPER_COMPUTE = _env("MIRACH_WHISPER_COMPUTE", "float16")
 WHISPER_LANG = _env("MIRACH_WHISPER_LANG", "es")
+WHISPER_BEAM_SIZE = _env_int("MIRACH_WHISPER_BEAM_SIZE", 3)  # 1-5 (lower = faster)
 
 # --- TTS ---
 VOICE_NAME = _env("MIRACH_VOICE", "daniela.onnx")
