@@ -43,8 +43,13 @@ Thumbs.db
 *.swp
 *.swo
 
-# Claude Code project context (local only)
+# AI assistant local config (Claude Code, Gemini, Aider, Cursor, Continue)
 CLAUDE.md
+.claude/
+.antigravitycli/
+.aider*
+.cursor/
+.continue/
 
 # User scripts (local per-user, gitignored content)
 user_scripts/*.sh

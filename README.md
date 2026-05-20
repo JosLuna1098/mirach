@@ -1,5 +1,11 @@
 # Mirach
 
+[![tests](https://github.com/JosLuna1098/mirach/actions/workflows/test.yml/badge.svg)](https://github.com/JosLuna1098/mirach/actions/workflows/test.yml)
+[![Deploy docs](https://github.com/JosLuna1098/mirach/actions/workflows/deploy-docs.yml/badge.svg)](https://github.com/JosLuna1098/mirach/actions/workflows/deploy-docs.yml)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+
 A local-first voice assistant daemon. Press a hotkey, talk, get an answer
 spoken back — with conversation memory, tool use, and ~3 s round-trip latency.
 
@@ -273,6 +279,16 @@ Mirach uses `notify-send`. Make sure you have a notification daemon
 
 This project was inspired by Nate Gentile's video [Mi PC Linux ahora trabaja por mí (CachyOS + IA)](https://www.youtube.com/watch?v=b6uQTR7E9qg).
 
+## Contributing
+
+Pull requests are welcome. Start with the
+[contributing guide](CONTRIBUTING.md) — it covers the dev setup, the
+`pytest` + `ruff` commands CI runs, and the PR flow.
+
+Participation is governed by the
+[Code of Conduct](.github/CODE_OF_CONDUCT.md). To report a security issue
+privately, see [SECURITY.md](.github/SECURITY.md).
+
 ## License
 
-MIT.
+Released under the [MIT License](LICENSE).

@@ -1,0 +1,39 @@
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: America/Guayaquil
+    open-pull-requests-limit: 5
+    versioning-strategy: increase
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      whisper-stack:
+        patterns:
+          - "faster-whisper"
+          - "piper-tts"
+      audio-runtime:
+        patterns:
+          - "sounddevice"
+          - "numpy"
+          - "scipy"
+      dev-tools:
+        patterns:
+          - "pytest*"
+          - "ruff*"
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: America/Guayaquil
+    commit-message:
+      prefix: ci
+      include: scope
