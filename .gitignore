@@ -33,6 +33,7 @@ voices/*.onnx.json
 # Runtime artifacts
 logs/
 *.log
+site/
 
 # OS / editor
 .DS_Store
