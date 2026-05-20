@@ -1,4 +1,5 @@
 site_name: Mirach
+site_url: https://mirach.jostech.dev
 site_description: Local-first voice assistant daemon — Whisper STT, OpenCode LLM, Piper TTS
 site_author: JosLuna
 repo_url: https://github.com/JosLuna1098/mirach
