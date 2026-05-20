@@ -256,10 +256,14 @@ def step_config(detected: dict, total: int) -> dict:
     )
     language_name, language_code = LANGUAGES[lang_idx - 1]
 
+    # Whisper model: multilingual for Spanish, English-optimized for English
+    whisper_model = "medium.en" if language_code == "en" else "medium"
+
     return {
         "assistant_name": name,
         "language": language_name,
         "language_code": language_code,
+        "whisper_model": whisper_model,
     }
 
 
@@ -701,6 +705,13 @@ def step_service(tvars: dict, total: int) -> None:
                 "# Environment=MIRACH_WHISPER_COMPUTE=int8",
                 "Environment=MIRACH_WHISPER_COMPUTE=int8",
             )
+
+        # Set Whisper model based on language
+        whisper_model = tvars.get("whisper_model", "medium")
+        content = content.replace(
+            "# Environment=MIRACH_WHISPER_MODEL=large-v3-turbo",
+            f"Environment=MIRACH_WHISPER_MODEL={whisper_model}",
+        )
 
         service_dest.write_text(content)
         ok(f"mirach.service installed → {service_dest}")

@@ -50,6 +50,10 @@ PassEnvironment=WAYLAND_DISPLAY XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS
 # Whisper compute type: float16 (GPU) or int8 (CPU). Match with MIRACH_WHISPER_DEVICE.
 # Environment=MIRACH_WHISPER_COMPUTE=int8
 
+# Whisper model: medium (multilingual, Spanish) or medium.en (English-optimized).
+# Set by install.py based on selected language.
+# Environment=MIRACH_WHISPER_MODEL=large-v3-turbo
+
 # Other overrides: MIRACH_MIC, MIRACH_OPENCODE_MODEL, MIRACH_FILLER_DELAY.
 # See mirach/config.py for the full list.
 
