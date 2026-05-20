@@ -1,6 +1,8 @@
 """Generate a styled HTML view of the latest conversation and open it in the browser.
 
-Creates a temporary file in /tmp/ that the OS cleans up automatically.
+Parses the Markdown conversation file, renders it as a chat-style HTML page
+with dark theme, and opens it via xdg-open (Linux) or open (macOS). The
+temporary file is placed in /tmp/ for automatic OS cleanup.
 """
 
 from __future__ import annotations
@@ -91,6 +93,7 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
 
 
 def _escape_html(text: str) -> str:
+    """Escape special HTML characters to prevent injection."""
     return (
         text.replace("&", "&amp;")
         .replace("<", "&lt;")
@@ -100,7 +103,11 @@ def _escape_html(text: str) -> str:
 
 
 def _parse_conversation(path: Path) -> list[tuple[str, str]]:
-    """Parse a markdown conversation file into (role, content) pairs."""
+    """Parse a Markdown conversation file into (role, content) pairs.
+
+    Recognizes headers starting with '## ' as role separators. Lines containing
+    'said' or 'user' map to the user role; everything else is assistant.
+    """
     if not path.exists():
         return []
 
@@ -112,6 +119,7 @@ def _parse_conversation(path: Path) -> list[tuple[str, str]]:
         for line in f:
             stripped = line.strip()
             if stripped.startswith("## "):
+                # Flush previous message
                 if current_role is not None:
                     messages.append((current_role, "\n".join(current_lines).strip()))
                 role = stripped[3:].strip().lower()
@@ -120,6 +128,7 @@ def _parse_conversation(path: Path) -> list[tuple[str, str]]:
             elif current_role is not None:
                 current_lines.append(line.rstrip())
 
+    # Flush last message
     if current_role is not None:
         messages.append((current_role, "\n".join(current_lines).strip()))
 
@@ -129,7 +138,7 @@ def _parse_conversation(path: Path) -> list[tuple[str, str]]:
 def generate_and_open() -> str | None:
     """Generate HTML from latest.md and open it in the default browser.
 
-    Returns the path to the generated HTML, or None if no conversation exists.
+    Returns the path to the generated HTML file, or None if no conversation exists.
     """
     latest = config.CONVERSATIONS_DIR / "latest.md"
     if not latest.exists():
@@ -141,6 +150,7 @@ def generate_and_open() -> str | None:
         log.warning("Conversation file is empty")
         return None
 
+    # Build message HTML
     msg_html = ""
     for role, content in messages:
         label = "You" if role == "user" else "Mirach"
@@ -152,15 +162,18 @@ def generate_and_open() -> str | None:
             f"</div>\n"
         )
 
+    # Render template
     ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(latest.stat().st_mtime))
     html = _HTML_TEMPLATE.format(timestamp=ts, messages=msg_html)
 
+    # Write to temp file
     fd, path = tempfile.mkstemp(suffix=".html", prefix="mirach_conversation_")
     with open(fd, "w") as f:
         f.write(html)
 
     log.info("Conversation HTML generated: %s", path)
 
+    # Open in browser
     if shutil.which("xdg-open"):
         subprocess.Popen(["xdg-open", path])
     elif shutil.which("open"):

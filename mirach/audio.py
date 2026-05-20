@@ -1,4 +1,8 @@
-"""Microphone recording. Thread-safe."""
+"""Microphone capture with thread-safe frame buffering.
+
+Records raw PCM float32 audio from the system microphone using sounddevice.
+Frames are collected via a callback and concatenated on stop().
+"""
 
 from __future__ import annotations
 
@@ -12,6 +16,12 @@ from mirach.logging_setup import log
 
 
 class AudioRecorder:
+    """Thread-safe microphone recorder.
+
+    Uses a callback-based InputStream to collect audio frames into a
+    shared list protected by a lock. start()/stop() control the lifecycle.
+    """
+
     def __init__(self) -> None:
         self._frames: list[np.ndarray] = []
         self._frames_lock = threading.Lock()
@@ -19,7 +29,11 @@ class AudioRecorder:
         self._device_idx: int | None = None
 
     def detect_microphone(self) -> None:
-        """Pick a mic matching MIC_NAME, otherwise fall back to system default."""
+        """Select a microphone matching MIC_NAME, falling back to system default.
+
+        Scans all input devices for one whose name contains the configured
+        substring and has input channels. Logs a warning if no match is found.
+        """
         devices = sd.query_devices()
         for i, d in enumerate(devices):
             if config.MIC_NAME.lower() in d["name"].lower() and d["max_input_channels"] > 0:
@@ -29,10 +43,12 @@ class AudioRecorder:
         log.warning("Microphone '%s' not found, using system default", config.MIC_NAME)
 
     def _callback(self, indata: np.ndarray, frames: int, time_info, status) -> None:
+        """sounddevice callback: append incoming audio frame to the buffer."""
         with self._frames_lock:
             self._frames.append(indata.copy())
 
     def start(self) -> None:
+        """Open the microphone stream and begin recording."""
         with self._frames_lock:
             self._frames.clear()
         self._stream = sd.InputStream(
@@ -46,6 +62,7 @@ class AudioRecorder:
         log.info("Recording started")
 
     def stop(self) -> np.ndarray | None:
+        """Stop the stream and return concatenated audio, or None if empty."""
         if self._stream is not None:
             self._stream.stop()
             self._stream.close()

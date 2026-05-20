@@ -1,6 +1,7 @@
-"""Lightweight i18n. Pick locale via MIRACH_LOCALE (default: en).
+"""Lightweight i18n system for UI strings and TTS filler phrases.
 
-Add new locales by extending STRINGS and FILLERS.
+Pick locale via MIRACH_LOCALE env var (default: en). Add new locales by
+extending the STRINGS and FILLERS dicts. Missing keys fall back to English.
 """
 
 from __future__ import annotations
@@ -11,9 +12,10 @@ DEFAULT_LOCALE = "en"
 LOCALE = os.environ.get("MIRACH_LOCALE", DEFAULT_LOCALE)
 HOTKEY = os.environ.get("MIRACH_HOTKEY", "Alt+Z")
 
+# Visible UI strings for notifications and spoken error fallbacks.
 STRINGS: dict[str, dict[str, str]] = {
     "en": {
-        # Notifications (visible)
+        # Desktop notifications
         "recording_start_title": "🎤 Listening...",
         "recording_start_body": "Press {hotkey} to finish",
         "processing_title": "🤖 Processing...",
@@ -40,6 +42,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "no_conversation": "No conversation saved yet.",
     },
     "es": {
+        # Desktop notifications
         "recording_start_title": "🎤 Escuchando...",
         "recording_start_body": "Presiona {hotkey} para terminar",
         "processing_title": "🤖 Procesando...",
@@ -51,6 +54,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "daemon_not_running": (
             "El daemon no está corriendo. Inícialo con: systemctl --user start mirach"
         ),
+        # Spoken error fallbacks (TTS)
         "nothing_recorded": "No grabé nada.",
         "didnt_hear": "No te escuché bien.",
         "didnt_understand": "No entendí, intenta de nuevo.",
@@ -66,6 +70,7 @@ STRINGS: dict[str, dict[str, str]] = {
     },
 }
 
+# Short filler phrases played during long LLM queries to signal the assistant is alive.
 FILLERS: dict[str, list[str]] = {
     "en": ["One moment.", "Hold on.", "Let me see.", "Hmm.", "Just a sec."],
     "es": ["Un momento.", "Dame un segundo.", "A ver.", "Espera.", "Mmm."],
@@ -73,7 +78,10 @@ FILLERS: dict[str, list[str]] = {
 
 
 def t(key: str) -> str:
-    """Translate a key. Falls back to English if missing in current locale."""
+    """Translate a string key. Falls back to English if missing in current locale.
+
+    Also substitutes {hotkey} placeholder with the configured hotkey display string.
+    """
     raw = STRINGS.get(LOCALE, STRINGS[DEFAULT_LOCALE]).get(key, STRINGS[DEFAULT_LOCALE][key])
     return raw.replace("{hotkey}", HOTKEY)
 
@@ -81,7 +89,7 @@ def t(key: str) -> str:
 def fillers() -> list[str]:
     """Return filler phrases for the current locale.
 
-    Can be overridden entirely via MIRACH_FILLERS env var (pipe-separated).
+    Can be overridden entirely via MIRACH_FILLERS env var (pipe-separated list).
     """
     override = os.environ.get("MIRACH_FILLERS")
     if override:

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Hotkey trigger — runs from Alt+Z (or whatever shortcut is bound).
 
-Standalone: only sends "toggle" to the daemon via its Unix socket. No imports,
-no model loading, no extra latency.
+Standalone script: only sends "toggle" to the daemon via its Unix socket.
+No imports from the mirach package, no model loading, no extra latency.
+Exits immediately after sending the message.
 """
 
 import os
@@ -19,6 +20,7 @@ try:
     s.sendall(b"toggle")
     s.close()
 except (ConnectionRefusedError, FileNotFoundError, TimeoutError):
+    # Daemon not running — notify the user via desktop notification
     subprocess.run(
         [
             "notify-send",

@@ -1,7 +1,11 @@
-"""Top-level orchestrator. Owns the FSM (IDLE → RECORDING → PROCESSING).
+"""Top-level orchestrator for the Mirach voice assistant.
 
-Pressing the hotkey while PROCESSING interrupts the current pipeline
-(stops TTS / kills the LLM call) and immediately starts a new recording.
+Owns a three-state finite state machine: IDLE → RECORDING → PROCESSING → IDLE.
+The only entry point is toggle(), called by the Unix socket server on every
+"toggle" message from the hotkey trigger.
+
+When PROCESSING, a second toggle() interrupts the running pipeline (kills the
+LLM subprocess and aborts TTS playback), then immediately starts a new recording.
 """
 
 from __future__ import annotations
@@ -31,37 +35,36 @@ from mirach.tts import PiperSpeaker
 
 
 class State(Enum):
+    """FSM states for the assistant pipeline."""
     IDLE = auto()
     RECORDING = auto()
     PROCESSING = auto()
 
 
 class _Interrupted(Exception):
-    """Raised by the pipeline when the user aborts the current run."""
+    """Raised internally to unwind the pipeline when the user aborts the current run."""
 
 
 @dataclass
 class UserScript:
-    """A user-defined voice-triggered script."""
-
+    """A user-defined voice-triggered script parsed from user_scripts/."""
     path: Path
     triggers: list[str]
     response: str
     description: str = ""
 
 
-# Built-in triggers that bypass the LLM.
-# Keys are trigger phrases (lowercase), values are (response_key, handler).
-# Response key maps to i18n.t(); handler is called with transcribed text.
+# Built-in trigger phrases that bypass the LLM entirely.
+# Keys are lowercase trigger phrases, values are (i18n response key, handler name).
 BUILTIN_TRIGGERS: dict[str, tuple[str, str]] = {
-    # Show conversation — Spanish
+    # Show conversation — Spanish variants
     "muéstrame la conversación": ("conversation_shown", "conversation"),
     "ver conversación": ("conversation_shown", "conversation"),
     "muestra la conversación": ("conversation_shown", "conversation"),
     "lee la conversación": ("conversation_shown", "conversation"),
     "ver la conversación": ("conversation_shown", "conversation"),
     "mostrar conversación": ("conversation_shown", "conversation"),
-    # Show conversation — English
+    # Show conversation — English variants
     "show conversation": ("conversation_shown", "conversation"),
     "show the conversation": ("conversation_shown", "conversation"),
     "read conversation": ("conversation_shown", "conversation"),
@@ -72,6 +75,8 @@ BUILTIN_TRIGGERS: dict[str, tuple[str, str]] = {
 
 
 class Assistant:
+    """Main assistant orchestrator. Manages the FSM and owns all pipeline components."""
+
     def __init__(
         self,
         *,
@@ -86,6 +91,7 @@ class Assistant:
         self._idle = threading.Event()
         self._idle.set()
 
+        # Pipeline components (injectable for testing)
         self._tts = tts or PiperSpeaker()
         self._audio = audio or AudioRecorder()
         self._stt = stt or WhisperTranscriber()
@@ -95,8 +101,10 @@ class Assistant:
         self._obsidian = ObsidianCache(config.OBSIDIAN_VAULT)
         self._user_scripts: list[UserScript] = []
 
-    # --- State helpers ---
+    # ── State helpers ──────────────────────────────────────────────────
+
     def _set_state(self, new: State) -> None:
+        """Transition to a new state, signaling the idle event when reaching IDLE."""
         with self._state_lock:
             self._state = new
         if new is State.IDLE:
@@ -105,11 +113,14 @@ class Assistant:
             self._idle.clear()
 
     def _check_interrupted(self) -> None:
+        """Raise _Interrupted if the user has requested an abort."""
         if self._interrupt.is_set():
             raise _Interrupted()
 
-    # --- Initialization ---
+    # ── Initialization ─────────────────────────────────────────────────
+
     def load(self) -> None:
+        """Load all pipeline components, warm up models, and parse user scripts."""
         self._stt.load()
         self._tts.load()
         self._audio.detect_microphone()
@@ -123,14 +134,18 @@ class Assistant:
             )
         self._user_scripts = self._load_user_scripts()
         log.info("Loaded %d user scripts", len(self._user_scripts))
-        # Warmup + filler cache so the first real turn is full speed.
+        # Warmup Whisper and pre-bake filler phrases so the first real turn is fast.
         self._stt.warmup()
         self._tts.prebake_fillers(i18n.fillers())
 
-    # --- User scripts ---
+    # ── User scripts ───────────────────────────────────────────────────
+
     @staticmethod
     def _parse_script_metadata(path: Path) -> UserScript | None:
-        """Parse # triggers: and # response: from the first lines of a script."""
+        """Parse # triggers: and # response: metadata from the first lines of a script.
+
+        Returns None if required fields (triggers, response) are missing.
+        """
         triggers: list[str] = []
         response = ""
         description = ""
@@ -138,9 +153,9 @@ class Assistant:
         with open(path) as f:
             for line in f:
                 if line.startswith("#!"):
-                    continue
+                    continue  # skip shebang
                 if not line.startswith("#"):
-                    break
+                    break  # end of metadata block
                 m_triggers = re.match(r"#\s*triggers:\s*(.+)", line, re.IGNORECASE)
                 m_response = re.match(r"#\s*response:\s*(.+)", line, re.IGNORECASE)
                 m_desc = re.match(r"#\s*description:\s*(.+)", line, re.IGNORECASE)
@@ -158,7 +173,7 @@ class Assistant:
         return UserScript(path=path, triggers=triggers, response=response, description=description)
 
     def _load_user_scripts(self) -> list[UserScript]:
-        """Scan user_scripts/ directory and parse all valid scripts."""
+        """Scan the user_scripts/ directory and parse all valid .sh/.py scripts."""
         scripts_dir = config.BASE_DIR / "user_scripts"
         if not scripts_dir.is_dir():
             return []
@@ -172,7 +187,7 @@ class Assistant:
         return scripts
 
     def _match_user_script(self, text: str) -> UserScript | None:
-        """Check if transcribed text matches any user script trigger."""
+        """Check if the transcribed text contains any user script trigger phrase."""
         lower = text.lower()
         for script in self._user_scripts:
             for trigger in script.triggers:
@@ -181,17 +196,24 @@ class Assistant:
         return None
 
     def _match_builtin_trigger(self, text: str) -> tuple[str, str] | None:
-        """Check if transcribed text matches a built-in trigger."""
+        """Check if the transcribed text contains any built-in trigger phrase."""
         lower = text.lower()
         for phrase, (response_key, handler) in BUILTIN_TRIGGERS.items():
             if phrase in lower:
                 return response_key, handler
         return None
 
-    # --- Main pipeline ---
+    # ── Main pipeline ──────────────────────────────────────────────────
+
     def _process(self) -> None:
+        """Run the full pipeline: stop recording → transcribe → LLM → speak.
+
+        Runs in a background thread. Handles interrupts, errors, and empty audio.
+        Always resets state to IDLE in the finally block.
+        """
         started = time.time()
         try:
+            # Step 1: Stop recording and validate audio length
             audio = self._audio.stop()
             if audio is None or len(audio) < config.SAMPLE_RATE * 0.5:
                 log.info("Empty or too-short audio")
@@ -199,6 +221,8 @@ class Assistant:
                 return
 
             self._check_interrupted()
+
+            # Step 2: Transcribe
             notify.notify(i18n.t("processing_title"), i18n.t("processing_body"), "microphone")
             text = self._stt.transcribe(audio)
             if not text:
@@ -208,7 +232,7 @@ class Assistant:
             self._check_interrupted()
             notify.notify(i18n.t("you_said"), text)
 
-            # Check built-in triggers first
+            # Step 3: Check built-in triggers (bypass LLM)
             builtin = self._match_builtin_trigger(text)
             if builtin:
                 response_key, handler = builtin
@@ -222,18 +246,16 @@ class Assistant:
                         self._conv.append(i18n.t("assistant"), "No conversation saved.")
                 return
 
-            # Check user scripts
+            # Step 4: Check user scripts (bypass LLM)
             matched = self._match_user_script(text)
             if matched:
                 log.info("User script triggered: %s", matched.path.name)
-                subprocess.Popen(
-                    [str(matched.path)],
-                    start_new_session=True,
-                )
+                subprocess.Popen([str(matched.path)], start_new_session=True)
                 self._tts.speak(matched.response)
                 self._conv.append(i18n.t("assistant"), matched.response)
                 return
 
+            # Step 5: LLM query (with optional Obsidian context on new sessions)
             new_session = self._llm.session_expired()
             if new_session:
                 self._conv.start()
@@ -249,6 +271,7 @@ class Assistant:
                 self._tts.speak(i18n.t("didnt_understand"))
                 return
 
+            # Step 6: Speak the response
             self._conv.append(i18n.t("assistant"), result.response)
             notify.notify(i18n.t("assistant"), result.response)
             self._tts.speak(result.response)
@@ -262,18 +285,22 @@ class Assistant:
         finally:
             self._set_state(State.IDLE)
 
-    # --- FSM: toggle ---
+    # ── FSM: toggle ────────────────────────────────────────────────────
+
     def toggle(self) -> None:
+        """Handle a hotkey press. Cycles through IDLE → RECORDING → PROCESSING.
+
+        If currently PROCESSING, interrupts the pipeline and starts a new recording.
+        """
         with self._state_lock:
             current = self._state
 
         if current is State.PROCESSING:
-            # User wants to interrupt and start a new recording.
+            # Interrupt the running pipeline and wait for it to release
             log.info("User interrupt requested")
             self._interrupt.set()
             self._llm.interrupt()
             self._tts.interrupt()
-            # Wait for the running pipeline to release the state.
             if not self._idle.wait(timeout=3.0):
                 log.warning("Pipeline did not release in 3s, forcing IDLE")
                 self._set_state(State.IDLE)
@@ -293,8 +320,10 @@ class Assistant:
             self._set_state(State.PROCESSING)
             threading.Thread(target=self._process, daemon=True).start()
 
-    # --- Entry point ---
+    # ── Entry point ────────────────────────────────────────────────────
+
     def run(self) -> None:
+        """Start the daemon: load components, generate beeps, and serve the socket."""
         log.info("=== Daemon starting ===")
         notify.generate_beeps()
         _install_shutdown_hooks()
@@ -303,7 +332,7 @@ class Assistant:
         SocketServer(on_toggle=self.toggle).serve_forever()
 
 
-# --- Shutdown handling ---
+# ── Shutdown handling ──────────────────────────────────────────────────
 _shutdown_played = False
 
 
@@ -321,18 +350,21 @@ def _play_shutdown_beep() -> None:
 
 
 def _signal_handler(signum: int, frame) -> None:
+    """Handle SIGTERM/SIGINT by playing the shutdown beep and exiting."""
     log.warning("Received signal %d, shutting down", signum)
     _play_shutdown_beep()
     sys.exit(0)
 
 
 def _install_shutdown_hooks() -> None:
+    """Register signal handlers and atexit callback for graceful shutdown."""
     signal.signal(signal.SIGTERM, _signal_handler)
     signal.signal(signal.SIGINT, _signal_handler)
     atexit.register(_play_shutdown_beep)
 
 
 def main() -> None:
+    """Entry point for `python -m mirach` or the installed `mirach` command."""
     Assistant().run()
 
 

@@ -1,0 +1,89 @@
+site_name: Mirach
+site_description: Local-first voice assistant daemon — Whisper STT, OpenCode LLM, Piper TTS
+site_author: JosLuna
+repo_url: https://github.com/JosLuna1098/mirach
+repo_name: JosLuna1098/mirach
+edit_uri: edit/master/docs/
+
+theme:
+  name: material
+  palette:
+    # Palette toggle for dark mode
+    - scheme: slate
+      primary: deep purple
+      accent: red
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+    # Palette toggle for light mode
+    - scheme: default
+      primary: deep purple
+      accent: red
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+  features:
+    - navigation.instant
+    - navigation.instant.progress
+    - navigation.tracking
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+  icon:
+    repo: fontawesome/brands/github
+  language: en
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - admonition
+  - pymdownx.details
+  - tables
+  - def_list
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Tutorial:
+      - Get Started: tutorial/get-started.md
+  - How-to Guides:
+      - User Scripts: how-to/user-scripts.md
+      - Change Voice: how-to/change-voice.md
+      - Change Whisper Model: how-to/change-whisper-model.md
+      - Add a Locale: how-to/add-locale.md
+      - Persistent Memory: how-to/persistent-memory.md
+      - View Conversations: how-to/view-conversations.md
+      - Troubleshooting: how-to/troubleshooting.md
+  - Reference:
+      - Configuration: reference/configuration.md
+      - Architecture: reference/architecture.md
+      - Dependencies: reference/dependencies.md
+      - IPC Protocol: reference/ipc.md
+      - User Scripts Format: reference/user-scripts-format.md
+  - Explanation:
+      - Design Decisions: explanation/design-decisions.md
+      - Why a Daemon: explanation/why-daemon.md
+      - Why OpenCode: explanation/why-opencode.md
+      - Why Whisper Medium: explanation/why-whisper-medium.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/JosLuna1098/mirach
+  generator: false
+
+copyright: Copyright &copy; 2025 JosLuna — MIT License

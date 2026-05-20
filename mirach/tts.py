@@ -1,16 +1,15 @@
-"""Text-to-speech using Piper.
+"""Text-to-speech using Piper with streaming, serialization, and filler pre-baking.
 
-Three improvements over a naive wrapper:
-  * **Streaming**: audio chunks are fed to a sounddevice OutputStream as Piper
+Three improvements over a naive Piper wrapper:
+  * **Streaming**: audio chunks are fed to a sounddevice.OutputStream as Piper
     emits them, so playback starts before synthesis finishes.
-  * **Serialized**: only one playback is active at a time. Concurrent `speak()`
-    calls queue behind each other, so a filler can't overlap with the answer.
-  * **Pre-baked fillers**: short, fixed phrases used during long LLM calls are
-    synthesized once at startup and cached as WAV files, so they play with
-    near-zero overhead.
+  * **Serialized**: only one speak() is active at a time. Concurrent calls queue
+    behind a lock, preventing filler phrases from overlapping with the answer.
+  * **Pre-baked fillers**: short fixed phrases used during long LLM calls are
+    synthesized once at startup and cached as WAV files for near-zero-latency playback.
 
-`interrupt()` aborts the current OutputStream from any thread without
-holding the playback queue lock.
+interrupt() aborts the current OutputStream from any thread without holding
+the playback queue lock.
 """
 
 from __future__ import annotations
@@ -33,34 +32,38 @@ _TMP = tempfile.gettempdir()
 
 
 class PiperSpeaker:
+    """Piper TTS engine with streaming playback and interrupt support."""
+
     def __init__(self) -> None:
         self._voice: PiperVoice | None = None
         self._sample_rate: int = 22050
         self._stream: sd.OutputStream | None = None
-        self._stream_lock = threading.Lock()  # short critical sections around _stream
-        self._playback_lock = threading.Lock()  # only one speak() runs at a time
-        self._filler_cache: dict[str, str] = {}
+        self._stream_lock = threading.Lock()   # protects _stream assignment/abort
+        self._playback_lock = threading.Lock()  # serializes speak() calls
+        self._filler_cache: dict[str, str] = {}  # phrase → temp WAV path
 
     def load(self) -> None:
+        """Load the Piper voice model from VOICE_PATH. Logs load time and sample rate."""
         t0 = time.time()
         self._voice = PiperVoice.load(str(config.VOICE_PATH))
         self._sample_rate = self._voice.config.sample_rate
         log.info("Piper voice loaded (%.1fs, %d Hz)", time.time() - t0, self._sample_rate)
 
-    # --- Public API ---
+    # ── Public API ─────────────────────────────────────────────────────
 
     def speak(self, text: str) -> None:
-        """Synthesize and play. Blocks until playback ends or is interrupted."""
+        """Synthesize and play text. Blocks until playback finishes or is interrupted."""
         with self._playback_lock:
             assert self._voice is not None, "Piper not loaded"
             syn_config = SynthesisConfig(length_scale=config.VOICE_SPEED)
             chunks = (
-                c.audio_int16_bytes for c in self._voice.synthesize(text, syn_config=syn_config)
+                c.audio_int16_bytes
+                for c in self._voice.synthesize(text, syn_config=syn_config)
             )
             self._play_stream(chunks, self._sample_rate)
 
     def speak_filler(self, phrase: str) -> None:
-        """Play a filler. Uses the pre-baked WAV if available, otherwise synthesizes."""
+        """Play a filler phrase. Uses the pre-baked WAV if cached, otherwise synthesizes live."""
         with self._playback_lock:
             cached = self._filler_cache.get(phrase)
             if cached and os.path.exists(cached):
@@ -75,16 +78,16 @@ class PiperSpeaker:
                 self._play_stream(chunks, self._sample_rate)
 
     def interrupt(self) -> None:
-        """Stop current playback. Safe to call from any thread."""
+        """Stop current playback immediately. Safe to call from any thread."""
         with self._stream_lock:
             if self._stream is not None and self._stream.active:
                 self._stream.abort()
                 log.info("TTS interrupted")
-        # Also stop any sd.play() used for WAV fillers
+        # Also stop any sd.play() used for pre-baked WAV fillers
         sd.stop()
 
     def prebake_fillers(self, phrases: list[str]) -> None:
-        """Pre-synthesize and cache the given phrases as WAV files."""
+        """Pre-synthesize and cache the given phrases as WAV files for fast playback."""
         assert self._voice is not None, "Piper not loaded"
         t0 = time.time()
         syn_config = SynthesisConfig(length_scale=config.VOICE_SPEED)
@@ -97,7 +100,7 @@ class PiperSpeaker:
         self._filler_cache = new_cache
         log.info("Pre-baked %d fillers (%.2fs)", len(phrases), time.time() - t0)
 
-    # --- Internal playback ---
+    # ── Internal playback ──────────────────────────────────────────────
 
     def _play_stream(self, chunks: Iterable[bytes], samplerate: int) -> None:
         """Stream raw int16 PCM chunks through a sounddevice OutputStream."""
@@ -111,7 +114,7 @@ class PiperSpeaker:
         try:
             for raw in chunks:
                 if not stream.active:
-                    return
+                    return  # interrupted
                 stream.write(np.frombuffer(raw, dtype=np.int16))
                 if first:
                     log.info("TTS first chunk (%.2fs)", time.time() - t0)
@@ -125,7 +128,7 @@ class PiperSpeaker:
                 self._stream = None
 
     def _play_wav(self, path: str) -> None:
-        """Play a pre-rendered WAV file (cached fillers). Uses sd.play for simplicity."""
+        """Play a pre-rendered WAV file (used for cached fillers)."""
         try:
             with wave.open(path, "rb") as wf:
                 data = np.frombuffer(wf.readframes(wf.getnframes()), dtype=np.int16)

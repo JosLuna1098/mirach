@@ -1,7 +1,8 @@
-"""Desktop notifications + beep generation/playback.
+"""Desktop notifications and beep generation/playback.
 
-Wraps `notify-send` and short WAV feedback tones. Designed to be easy to swap
-for a cross-platform implementation later.
+Wraps `notify-send` for asynchronous desktop notifications and generates
+short WAV feedback tones (beeps) using numpy sine waves. Designed to be
+swappable for a cross-platform implementation later.
 """
 
 from __future__ import annotations
@@ -22,7 +23,11 @@ log = logging.getLogger("mirach")
 
 
 def notify(title: str, body: str, icon: str = "dialog-information") -> None:
-    """Send a desktop notification asynchronously (non-blocking)."""
+    """Send a desktop notification asynchronously (non-blocking).
+
+    Spawns a daemon thread to run notify-send so the main pipeline is not
+    blocked by the subprocess. Silently skips if notify-send is unavailable.
+    """
     if not shutil.which("notify-send"):
         log.debug("notify-send unavailable — skipping: %s", title)
         return
@@ -39,7 +44,7 @@ def notify(title: str, body: str, icon: str = "dialog-information") -> None:
 def _generate_beep_wav(
     path: str, freq_hz: int, dur_sec: float, volume: float = 0.3, sr: int = 22050
 ) -> None:
-    """Write a sine-tone WAV with 10 ms fade in/out to avoid clicks."""
+    """Write a sine-tone WAV file with 10 ms fade in/out to avoid audio clicks."""
     n = int(sr * dur_sec)
     t = np.linspace(0, dur_sec, n, endpoint=False)
     wave_data = volume * np.sin(2 * np.pi * freq_hz * t)
@@ -62,7 +67,7 @@ def _generate_descending_beep_wav(
     volume: float = 0.3,
     sr: int = 22050,
 ) -> None:
-    """Write a sequence of tones with short gaps. Used for the shutdown beep."""
+    """Write a sequence of descending tones with short gaps. Used for the shutdown beep."""
     parts: list[np.ndarray] = []
     fade = max(1, int(sr * 0.01))
     gap_samples = np.zeros(int(sr * gap), dtype=np.float32)
@@ -84,7 +89,7 @@ def _generate_descending_beep_wav(
 
 
 def generate_beeps() -> None:
-    """(Re)generate all feedback WAVs. Idempotent."""
+    """(Re)generate all feedback WAVs to the temp directory. Idempotent."""
     _generate_beep_wav(config.BEEP_START_WAV, freq_hz=1320, dur_sec=0.06)
     _generate_beep_wav(config.BEEP_PROCESS_WAV, freq_hz=660, dur_sec=0.08)
     _generate_descending_beep_wav(config.BEEP_SHUTDOWN_WAV)
