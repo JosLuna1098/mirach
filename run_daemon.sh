@@ -8,7 +8,11 @@
 
 set -euo pipefail
 
-BASE_DIR="${MIRACH_BASE_DIR:-$HOME/mirach}"
+# Self-locate by default: resolve the directory of this script, following symlinks.
+# This makes the daemon work no matter where the repo lives. Override with
+# MIRACH_BASE_DIR only if you want logs/voices/system_prompt in a different tree.
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+BASE_DIR="${MIRACH_BASE_DIR:-$SCRIPT_DIR}"
 VENV="$BASE_DIR/venv"
 
 # Auto-detect Python version of the venv (3.12 / 3.13 / etc.)
