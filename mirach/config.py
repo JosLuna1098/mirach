@@ -35,7 +35,10 @@ def _env_int(name: str, default: int) -> int:
 
 
 # ── Paths ──────────────────────────────────────────────────────────────
-BASE_DIR = Path(_env("MIRACH_BASE_DIR", str(Path.home() / "mirach")))
+# Default to the repo containing this file (config.py is at <repo>/mirach/config.py).
+# Resolves correctly for `pip install -e .` no matter where the repo lives.
+# Override with MIRACH_BASE_DIR if logs/voices/system_prompt belong elsewhere.
+BASE_DIR = Path(_env("MIRACH_BASE_DIR", str(Path(__file__).resolve().parent.parent)))
 VOICES_DIR = BASE_DIR / "voices"
 LOGS_DIR = BASE_DIR / "logs"
 CONVERSATIONS_DIR = LOGS_DIR / "conversations"
