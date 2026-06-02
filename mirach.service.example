@@ -22,6 +22,10 @@ RestartSec=3
 # Inherit Wayland / audio / dbus from the graphical session
 PassEnvironment=WAYLAND_DISPLAY XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS
 
+# Project location — install.py rewrites this to the actual repo path.
+# run_daemon.sh self-locates too, so this is belt-and-suspenders.
+# Environment=MIRACH_BASE_DIR=%h/mirach
+
 # --- Optional overrides ---
 # Locale of spoken fillers and visible notifications (default: en).
 # Available out of the box: en, es. Add more in mirach/i18n.py.

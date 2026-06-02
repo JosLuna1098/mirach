@@ -676,6 +676,13 @@ def step_service(tvars: dict, total: int) -> None:
         # Patch ExecStart to this repo's run_daemon.sh
         content = content.replace("%h/mirach/run_daemon.sh", str(REPO_DIR / "run_daemon.sh"))
 
+        # Pin MIRACH_BASE_DIR to this repo so the service is unambiguous and
+        # works even if run_daemon.sh's self-location logic ever changes.
+        content = content.replace(
+            "# Environment=MIRACH_BASE_DIR=%h/mirach",
+            f"Environment=MIRACH_BASE_DIR={REPO_DIR}",
+        )
+
         # Activate locale/language
         lang_code = tvars.get("language_code", "en")
         content = content.replace(
