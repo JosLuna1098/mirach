@@ -145,6 +145,36 @@ python3 trigger.py       # second press: processes and speaks
 python3 trigger.py       # press during playback: interrupts and re-records
 ```
 
+### Moving an existing installation
+
+Both `run_daemon.sh` and `mirach/config.py` self-locate from their own path,
+so the project works from any location. Two things still need attention when
+moving an already-installed checkout:
+
+1. The venv has the absolute path baked into editable-install metadata and
+   bin/* shebangs — recreate it after the move.
+2. The systemd unit and your compositor's hotkey still point at the old path.
+
+```bash
+systemctl --user stop mirach
+mv ~/mirach ~/Projects/mirach
+rm -rf ~/Projects/mirach/{venv,mirach.egg-info,__pycache__}
+
+cd ~/Projects/mirach
+python3 -m venv venv
+./venv/bin/pip install -e .
+# GPU only:
+./venv/bin/pip install "nvidia-cublas-cu12>=12.0" "nvidia-cudnn-cu12>=9.0"
+
+# Point service + hotkey at the new path (adjust to your old path)
+sed -i 's|/home/<you>/mirach|/home/<you>/Projects/mirach|g' \
+    ~/.config/systemd/user/mirach.service \
+    ~/.config/hypr/custom/mirach.conf  # or wherever your bind lives
+
+systemctl --user daemon-reload && systemctl --user start mirach
+hyprctl reload  # or your compositor's reload command
+```
+
 ---
 
 ## Configuration
