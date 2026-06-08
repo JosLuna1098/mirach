@@ -14,6 +14,7 @@ the playback queue lock.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import tempfile
 import threading
@@ -32,13 +33,19 @@ _TMP = tempfile.gettempdir()
 
 
 class PiperSpeaker:
-    """Piper TTS engine with streaming playback and interrupt support."""
+    """Piper TTS engine with streaming playback, persistent OutputStream, and interrupt.
+
+    Opens the PortAudio OutputStream once at startup and reuses it across
+    speak() calls via start()/stop() cycles, avoiding the creation of a new
+    ALSA PCM device per turn. After an interrupt the stream is closed and
+    lazily recreated on the next play call.
+    """
 
     def __init__(self) -> None:
         self._voice: PiperVoice | None = None
         self._sample_rate: int = 22050
         self._stream: sd.OutputStream | None = None
-        self._stream_lock = threading.Lock()  # protects _stream assignment/abort
+        self._stream_lock = threading.RLock()  # reentrant — protects _stream assignment/abort
         self._playback_lock = threading.Lock()  # serializes speak() calls
         self._filler_cache: dict[str, str] = {}  # phrase → temp WAV path
 
@@ -47,7 +54,30 @@ class PiperSpeaker:
         t0 = time.time()
         self._voice = PiperVoice.load(str(config.VOICE_PATH))
         self._sample_rate = self._voice.config.sample_rate
+        self._open_stream()
         log.info("Piper voice loaded (%.1fs, %d Hz)", time.time() - t0, self._sample_rate)
+
+    def _open_stream(self) -> None:
+        """Open (or reopen) the persistent OutputStream and start it."""
+        with self._stream_lock:
+            if self._stream is not None:
+                with contextlib.suppress(Exception):
+                    self._stream.close()
+            self._stream = sd.OutputStream(
+                samplerate=self._sample_rate,
+                channels=1,
+                dtype="int16",
+            )
+            self._stream.start()
+
+    def close(self) -> None:
+        """Close the persistent OutputStream. Called once at daemon shutdown."""
+        with self._stream_lock:
+            if self._stream is not None:
+                with contextlib.suppress(Exception):
+                    self._stream.close()
+                self._stream = None
+                log.info("TTS OutputStream closed")
 
     # ── Public API ─────────────────────────────────────────────────────
 
@@ -77,13 +107,18 @@ class PiperSpeaker:
                 self._play_stream(chunks, self._sample_rate)
 
     def interrupt(self) -> None:
-        """Stop current playback immediately. Safe to call from any thread."""
+        """Stop current playback immediately. Safe to call from any thread.
+
+        Closes the stream; it will be recreated lazily on the next call
+        via _ensure_stream.
+        """
         with self._stream_lock:
-            if self._stream is not None and self._stream.active:
-                self._stream.abort()
-                log.info("TTS interrupted")
-        # Also stop any sd.play() used for pre-baked WAV fillers
-        sd.stop()
+            if self._stream is not None:
+                with contextlib.suppress(Exception):
+                    self._stream.abort()
+                self._stream.close()
+                self._stream = None
+                log.info("TTS interrupted (stream closed)")
 
     def prebake_fillers(self, phrases: list[str]) -> None:
         """Pre-synthesize and cache the given phrases as WAV files for fast playback."""
@@ -101,13 +136,23 @@ class PiperSpeaker:
 
     # ── Internal playback ──────────────────────────────────────────────
 
+    def _ensure_stream(self) -> sd.OutputStream:
+        """Return the persistent OutputStream, recreating if closed.
+
+        After a normal stop() the stream is still open (closed=False) and can
+        be restarted with start(). Only after close() (e.g. from interrupt)
+        does the stream need to be recreated.
+        """
+        if self._stream is None or self._stream.closed:
+            self._open_stream()
+        return self._stream
+
     def _play_stream(self, chunks: Iterable[bytes], samplerate: int) -> None:
-        """Stream raw int16 PCM chunks through a sounddevice OutputStream."""
+        """Stream int16 PCM chunks through the persistent OutputStream."""
         t0 = time.time()
         with self._stream_lock:
-            self._stream = sd.OutputStream(samplerate=samplerate, channels=1, dtype="int16")
-            self._stream.start()
-            stream = self._stream
+            stream = self._ensure_stream()
+            stream.start()
 
         first = True
         try:
@@ -122,17 +167,16 @@ class PiperSpeaker:
             log.info("TTS done (%.2fs total)", time.time() - t0)
         except sd.PortAudioError as e:
             log.error("TTS audio error: %s", e)
-        finally:
-            with self._stream_lock:
-                self._stream = None
 
     def _play_wav(self, path: str) -> None:
-        """Play a pre-rendered WAV file (used for cached fillers)."""
+        """Play a pre-rendered WAV file through the persistent OutputStream."""
         try:
             with wave.open(path, "rb") as wf:
-                data = np.frombuffer(wf.readframes(wf.getnframes()), dtype=np.int16)
+                data = wf.readframes(wf.getnframes())
                 sr = wf.getframerate()
-            sd.play(data, sr)
-            sd.wait()
+            if sr != self._sample_rate:
+                self._sample_rate = sr
+                self._open_stream()
+            self._play_stream([data], sr)
         except Exception as e:
             log.warning("WAV playback failed: %s", e)

@@ -16,10 +16,11 @@ from mirach.logging_setup import log
 
 
 class AudioRecorder:
-    """Thread-safe microphone recorder.
+    """Thread-safe microphone recorder with persistent InputStream.
 
-    Uses a callback-based InputStream to collect audio frames into a
-    shared list protected by a lock. start()/stop() control the lifecycle.
+    Opens the PortAudio InputStream once at startup and keeps it running
+    for the daemon's lifetime. A flag controls whether incoming frames are
+    accumulated, so no new ALSA PCM device is created per recording turn.
     """
 
     def __init__(self) -> None:
@@ -27,6 +28,7 @@ class AudioRecorder:
         self._frames_lock = threading.Lock()
         self._stream: sd.InputStream | None = None
         self._device_idx: int | None = None
+        self._recording = False
 
     def detect_microphone(self) -> None:
         """Select a microphone matching MIC_NAME, falling back to system default.
@@ -42,15 +44,10 @@ class AudioRecorder:
                 return
         log.warning("Microphone '%s' not found, using system default", config.MIC_NAME)
 
-    def _callback(self, indata: np.ndarray, frames: int, time_info, status) -> None:
-        """sounddevice callback: append incoming audio frame to the buffer."""
-        with self._frames_lock:
-            self._frames.append(indata.copy())
-
-    def start(self) -> None:
-        """Open the microphone stream and begin recording."""
-        with self._frames_lock:
-            self._frames.clear()
+    def open(self) -> None:
+        """Open and start the InputStream. Called once at daemon startup."""
+        if self._stream is not None:
+            return
         self._stream = sd.InputStream(
             samplerate=config.SAMPLE_RATE,
             channels=1,
@@ -59,18 +56,36 @@ class AudioRecorder:
             device=self._device_idx,
         )
         self._stream.start()
-        log.info("Recording started")
+        log.info("Audio InputStream opened (persistent)")
 
-    def stop(self) -> np.ndarray | None:
-        """Stop the stream and return concatenated audio, or None if empty.
-
-        Enforces a maximum recording duration to prevent unbounded memory growth.
-        If the recording exceeds MAX_RECORDING_SEC, only the last portion is kept.
-        """
+    def close(self) -> None:
+        """Stop and close the InputStream. Called once at daemon shutdown."""
+        self._recording = False
         if self._stream is not None:
             self._stream.stop()
             self._stream.close()
             self._stream = None
+            log.info("Audio InputStream closed")
+
+    def _callback(self, indata: np.ndarray, frames: int, time_info, status) -> None:
+        """sounddevice callback: only accumulate frames when recording."""
+        if self._recording:
+            with self._frames_lock:
+                self._frames.append(indata.copy())
+
+    def start(self) -> None:
+        """Begin recording by clearing the buffer and enabling accumulation."""
+        with self._frames_lock:
+            self._frames.clear()
+        self._recording = True
+        log.info("Recording started")
+
+    def stop(self) -> np.ndarray | None:
+        """Stop recording and return concatenated audio, or None if empty.
+
+        Does NOT close the stream — it stays open for the next turn.
+        """
+        self._recording = False
         with self._frames_lock:
             if not self._frames:
                 return None

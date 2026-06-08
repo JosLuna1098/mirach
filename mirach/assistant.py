@@ -128,6 +128,7 @@ class Assistant:
         self._stt.load()
         self._tts.load()
         self._audio.detect_microphone()
+        self._audio.open()
         if config.SYSTEM_PROMPT_PATH.exists():
             self._system_prompt = config.SYSTEM_PROMPT_PATH.read_text()
             log.info("System prompt loaded (%d chars)", len(self._system_prompt))
@@ -337,8 +338,9 @@ class Assistant:
     def run(self) -> None:
         """Start the daemon: load components, generate beeps, and serve the socket."""
         log.info("=== Daemon starting ===")
+        notify.open_beep_stream()
         notify.generate_beeps()
-        _install_shutdown_hooks()
+        _install_shutdown_hooks(self)
         self.load()
         notify.notify(i18n.t("daemon_ready_title"), i18n.t("daemon_ready_body"))
         SocketServer(on_toggle=self.toggle).serve_forever()
@@ -346,6 +348,23 @@ class Assistant:
 
 # ── Shutdown handling ──────────────────────────────────────────────────
 _shutdown_played = False
+_cleanup_done = False
+_shutdown_assistant: Assistant | None = None
+
+
+def _cleanup_audio() -> None:
+    """Close persistent audio streams at shutdown."""
+    global _cleanup_done, _shutdown_assistant
+    if _cleanup_done:
+        return
+    _cleanup_done = True
+    if _shutdown_assistant is not None:
+        with contextlib.suppress(Exception):
+            _shutdown_assistant._audio.close()
+        with contextlib.suppress(Exception):
+            _shutdown_assistant._tts.close()
+    with contextlib.suppress(Exception):
+        notify.close_beep_stream()
 
 
 def _play_shutdown_beep() -> None:
@@ -365,14 +384,18 @@ def _signal_handler(signum: int, frame) -> None:
     """Handle SIGTERM/SIGINT by playing the shutdown beep and exiting."""
     log.warning("Received signal %d, shutting down", signum)
     _play_shutdown_beep()
+    _cleanup_audio()
     sys.exit(0)
 
 
-def _install_shutdown_hooks() -> None:
+def _install_shutdown_hooks(assistant: Assistant) -> None:
     """Register signal handlers and atexit callback for graceful shutdown."""
+    global _shutdown_assistant
+    _shutdown_assistant = assistant
     signal.signal(signal.SIGTERM, _signal_handler)
     signal.signal(signal.SIGINT, _signal_handler)
     atexit.register(_play_shutdown_beep)
+    atexit.register(_cleanup_audio)
 
 
 def main() -> None:

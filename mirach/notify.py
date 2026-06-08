@@ -7,6 +7,7 @@ swappable for a cross-platform implementation later.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import queue
@@ -25,6 +26,34 @@ log = logging.getLogger("mirach")
 # Single worker thread for notifications to avoid thread churn under burst conditions.
 _notify_queue: queue.Queue[tuple[str, str, str]] = queue.Queue()
 _notify_worker: threading.Thread | None = None
+
+# Persistent OutputStream for beep playback (avoids creating a new ALSA PCM per beep).
+_beep_stream: sd.OutputStream | None = None
+_beep_stream_lock = threading.Lock()
+
+
+def open_beep_stream(samplerate: int = 22050) -> None:
+    """Open the persistent beep OutputStream. Called once at daemon startup."""
+    global _beep_stream
+    with _beep_stream_lock:
+        if _beep_stream is not None:
+            return
+        _beep_stream = sd.OutputStream(
+            samplerate=samplerate,
+            channels=1,
+            dtype="int16",
+        )
+
+
+def close_beep_stream() -> None:
+    """Close the persistent beep OutputStream. Called once at daemon shutdown."""
+    global _beep_stream
+    with _beep_stream_lock:
+        if _beep_stream is not None:
+            with contextlib.suppress(Exception):
+                _beep_stream.stop()
+            _beep_stream.close()
+            _beep_stream = None
 
 
 def _notify_worker_loop() -> None:
@@ -116,15 +145,23 @@ def generate_beeps() -> None:
 
 
 def play_beep(path: str, blocking: bool = False) -> None:
-    """Play a beep WAV via sounddevice. Non-blocking by default; blocking for shutdown."""
+    """Play a beep WAV via the persistent OutputStream.
+
+    Non-blocking by default (returns immediately, audio plays out); blocking
+    is used for the shutdown beep (calls stop() to wait for completion).
+    """
+    global _beep_stream
     if not path or not os.path.exists(path):
         return
     try:
         with wave.open(path, "rb") as wf:
             data = np.frombuffer(wf.readframes(wf.getnframes()), dtype=np.int16)
-            sr = wf.getframerate()
-        sd.play(data, sr)
-        if blocking:
-            sd.wait()
+        with _beep_stream_lock:
+            if _beep_stream is None:
+                return
+            _beep_stream.start()
+            _beep_stream.write(data)
+            if blocking:
+                _beep_stream.stop()
     except Exception as e:
         log.warning("Beep playback failed: %s", e)
