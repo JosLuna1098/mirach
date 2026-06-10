@@ -99,7 +99,18 @@ class Assistant:
         self._tts = tts or PiperSpeaker()
         self._audio = audio or AudioRecorder()
         self._stt = stt or WhisperTranscriber()
-        self._llm = llm or OpenCodeBackend(speak_filler=self._tts.speak_filler)
+        if llm is not None:
+            self._llm = llm
+        elif config.BACKEND == "native":
+            from mirach.harness.build import build_native_backend
+
+            self._llm = build_native_backend(speak_filler=self._tts.speak_filler)
+        elif config.BACKEND == "opencode_serve":
+            from mirach.harness.build import build_opencode_serve_backend
+
+            self._llm = build_opencode_serve_backend(speak_filler=self._tts.speak_filler)
+        else:
+            self._llm = OpenCodeBackend(speak_filler=self._tts.speak_filler)
         self._conv = ConversationLog()
         self._system_prompt = ""
         self._obsidian = ObsidianCache(config.OBSIDIAN_VAULT)
@@ -366,6 +377,9 @@ class Assistant:
             self._audio.close()
         with contextlib.suppress(Exception):
             self._tts.close()
+        with contextlib.suppress(Exception):
+            if hasattr(self._llm, "stop"):
+                self._llm.stop()
 
 
 # ── Shutdown handling ──────────────────────────────────────────────────

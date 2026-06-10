@@ -111,6 +111,38 @@ CODING_KEYWORDS = [
 ]
 SESSION_IDLE_TIMEOUT = _env_float("MIRACH_SESSION_IDLE_TIMEOUT", 3600.0)  # 1 hour
 
+# ── Backend selection ─────────────────────────────────────────────────
+# MIRACH_BACKEND=opencode  (default) — delegate to opencode CLI (existing path)
+# MIRACH_BACKEND=native             — use the custom agentic harness (Phase 1)
+BACKEND = _env("MIRACH_BACKEND", "opencode")
+
+# ── Native harness (MIRACH_BACKEND=native) ─────────────────────────────
+# NOTE (Ollama tool-calling compat — see planning/harness/model-compat.md):
+#   Not every model calls tools natively via Ollama. qwen2.5:7b returns an empty
+#   stop instead of a tool_call → use MIRACH_NATIVE_TOOL_PROTOCOL=prompted with it.
+#   qwen3:14b works with native tool-calling (use protocol=auto). When picking a
+#   new model, verify native tool-calling before trusting protocol=auto.
+NATIVE_BASE_URL = _env("MIRACH_NATIVE_BASE_URL", "http://localhost:11434")
+NATIVE_MODEL = _env("MIRACH_NATIVE_MODEL", "gemma3:14b")
+NATIVE_API_KEY = _env("MIRACH_NATIVE_API_KEY", "ollama")
+NATIVE_NUM_CTX = _env_int("MIRACH_NATIVE_NUM_CTX", 32768)
+NATIVE_TIMEOUT = _env_float("MIRACH_NATIVE_TIMEOUT", 120.0)
+NATIVE_TEMPERATURE = _env_float("MIRACH_NATIVE_TEMPERATURE", 0.0)
+# auto | native | prompted
+NATIVE_TOOL_PROTOCOL = _env("MIRACH_NATIVE_TOOL_PROTOCOL", "auto")
+# Path to user's policy.yaml; falls back to built-in restrictive defaults if absent.
+NATIVE_POLICY_PATH = Path(_env("MIRACH_NATIVE_POLICY", str(BASE_DIR / "policy.yaml")))
+
+# ── OpenCode serve backend (MIRACH_BACKEND=opencode_serve) ────────────
+# opencode serve is launched as a supervised subprocess; port 0 = random free port.
+OPENCODE_SERVE_HOST = _env("MIRACH_OPENCODE_SERVE_HOST", "127.0.0.1")
+OPENCODE_SERVE_PORT = _env_int("MIRACH_OPENCODE_SERVE_PORT", 0)
+OPENCODE_SERVE_CWD = _env("MIRACH_OPENCODE_SERVE_CWD", "")  # default: cwd at daemon start
+OPENCODE_SERVE_STARTUP_TIMEOUT = _env_float("MIRACH_OPENCODE_SERVE_STARTUP_TIMEOUT", 15.0)
+OPENCODE_SERVE_PROVIDER_ID = _env("MIRACH_OPENCODE_SERVE_PROVIDER_ID", "")
+OPENCODE_SERVE_MODEL_ID = _env("MIRACH_OPENCODE_SERVE_MODEL_ID", "")
+# Policy file is shared with the native backend; set MIRACH_NATIVE_POLICY to override.
+
 # ── User feedback (beeps and fillers) ─────────────────────────────────
 BEEP_START_WAV = os.path.join(_TMP, "mirach_beep_start.wav")
 BEEP_PROCESS_WAV = os.path.join(_TMP, "mirach_beep_process.wav")
