@@ -318,6 +318,7 @@ class Assistant:
                 log.warning("Pipeline did not release in 3s, forcing IDLE")
                 self._set_state(State.IDLE)
             self._interrupt.clear()
+            self._tts.clear_interrupt()  # re-enable TTS for the new turn
             current = State.IDLE  # fall through to start recording
 
         if current is State.IDLE:
@@ -345,6 +346,13 @@ class Assistant:
         notify.notify(i18n.t("daemon_ready_title"), i18n.t("daemon_ready_body"))
         SocketServer(on_toggle=self.toggle).serve_forever()
 
+    def shutdown(self) -> None:
+        """Close persistent audio streams. Idempotent; safe to call at shutdown."""
+        with contextlib.suppress(Exception):
+            self._audio.close()
+        with contextlib.suppress(Exception):
+            self._tts.close()
+
 
 # ── Shutdown handling ──────────────────────────────────────────────────
 _shutdown_played = False
@@ -359,10 +367,7 @@ def _cleanup_audio() -> None:
         return
     _cleanup_done = True
     if _shutdown_assistant is not None:
-        with contextlib.suppress(Exception):
-            _shutdown_assistant._audio.close()
-        with contextlib.suppress(Exception):
-            _shutdown_assistant._tts.close()
+        _shutdown_assistant.shutdown()
     with contextlib.suppress(Exception):
         notify.close_beep_stream()
 

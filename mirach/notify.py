@@ -38,11 +38,19 @@ def open_beep_stream(samplerate: int = 22050) -> None:
     with _beep_stream_lock:
         if _beep_stream is not None:
             return
-        _beep_stream = sd.OutputStream(
-            samplerate=samplerate,
-            channels=1,
-            dtype="int16",
-        )
+        try:
+            _beep_stream = sd.OutputStream(
+                samplerate=samplerate,
+                channels=1,
+                dtype="int16",
+            )
+        except Exception as e:
+            log.error(
+                "Could not open beep output stream: %s — "
+                "a software mixer (PipeWire/PulseAudio or ALSA dmix) is required. "
+                "Beeps will be silent.",
+                e,
+            )
 
 
 def close_beep_stream() -> None:
@@ -60,8 +68,6 @@ def _notify_worker_loop() -> None:
     """Background worker that processes notifications from the queue."""
     while True:
         title, body, icon = _notify_queue.get()
-        if title is None:  # Sentinel value to stop the worker
-            break
         if shutil.which("notify-send"):
             subprocess.run(
                 ["notify-send", "-t", "4000", "-i", icon, title, body],
@@ -147,8 +153,9 @@ def generate_beeps() -> None:
 def play_beep(path: str, blocking: bool = False) -> None:
     """Play a beep WAV via the persistent OutputStream.
 
-    Non-blocking by default (returns immediately, audio plays out); blocking
-    is used for the shutdown beep (calls stop() to wait for completion).
+    By default the write only blocks briefly while the data is buffered, then
+    audio plays out asynchronously. With blocking=True (the shutdown beep) it
+    calls stop() to wait for playback to fully drain.
     """
     global _beep_stream
     if not path or not os.path.exists(path):

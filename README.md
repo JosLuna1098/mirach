@@ -47,6 +47,11 @@ browser as a styled HTML page.
 - **Python 3.11+** — the only hard prerequisite. The installer handles the rest.
 - **PortAudio** — required by `sounddevice` for audio I/O. Pre-installed on
   most Linux desktops; on Debian/Ubuntu: `sudo apt install portaudio19-dev`.
+- **A software mixer (PipeWire, PulseAudio, or ALSA `dmix`)** — the daemon keeps
+  persistent input/output streams open for the whole session, so it needs a
+  backend that allows concurrent streams. On a raw ALSA `hw:` device without
+  `dmix` the second stream fails to open; Mirach logs an actionable error and
+  degrades to silent beeps/speech instead of crashing.
 - **NVIDIA GPU with CUDA 12 drivers** — for Whisper STT (CPU mode works but
   adds 2-5 s of latency — see troubleshooting).
 - **`notify-send`** — optional, for desktop notifications (mako/dunst/swaync).
