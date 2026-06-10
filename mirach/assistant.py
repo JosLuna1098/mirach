@@ -199,12 +199,23 @@ class Assistant:
                     scripts.append(parsed)
         return scripts
 
+    @staticmethod
+    def _phrase_in(phrase: str, text: str) -> bool:
+        """True if `phrase` appears in `text` on word boundaries (no substring matches).
+
+        Avoids false positives like the trigger "api" matching inside "rápido".
+        Both arguments are expected to be lowercase.
+        """
+        if not phrase:
+            return False
+        return re.search(rf"\b{re.escape(phrase)}\b", text) is not None
+
     def _match_user_script(self, text: str) -> UserScript | None:
         """Check if the transcribed text contains any user script trigger phrase."""
         lower = text.lower()
         for script in self._user_scripts:
             for trigger in script.triggers:
-                if trigger in lower:
+                if self._phrase_in(trigger, lower):
                     return script
         return None
 
@@ -212,7 +223,7 @@ class Assistant:
         """Check if the transcribed text contains any built-in trigger phrase."""
         lower = text.lower()
         for phrase, (response_key, handler) in BUILTIN_TRIGGERS.items():
-            if phrase in lower:
+            if self._phrase_in(phrase, lower):
                 return response_key, handler
         return None
 
