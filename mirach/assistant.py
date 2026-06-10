@@ -280,6 +280,9 @@ class Assistant:
                 return
 
             # Step 5: LLM query (with optional Obsidian context on new sessions)
+            # We evaluate session_expired() here (the LLM re-checks it inside
+            # query()) because we need the decision *before* the query to start
+            # a new conversation log and refresh the Obsidian cache.
             new_session = self._llm.session_expired()
             if new_session:
                 self._conv.start()

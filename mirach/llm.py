@@ -192,6 +192,11 @@ class OpenCodeBackend:
         timeout = config.OPENCODE_TIMEOUT_CODING if coding else config.OPENCODE_TIMEOUT
         log.info("OpenCode timeout: %.0fs (coding=%s)", timeout, coding)
 
+        # NOTE: --dangerously-skip-permissions grants the agent unattended tool
+        # access. Voice is a semi-trusted input channel, so the guardrails live
+        # in the Obsidian memory policy (e.g. "never format/wipe the machine")
+        # rather than in interactive prompts. Declarative, harness-enforced
+        # policy is tracked separately (future custom harness).
         cmd = [
             "opencode",
             "run",
@@ -268,18 +273,27 @@ class OpenCodeBackend:
         # Determine timeout category once based on user query
         coding = _is_coding_query(text)
 
-        # Build query payload: system prompt + context on new sessions, raw text otherwise
-        if new_session and system_prompt:
-            context_block = ""
-            if obsidian_context:
-                context_block = (
-                    f"\n\n---\n\nRestored context from your memory:\n\n{obsidian_context}"
+        # Build query payload. On a new session we prepend the system prompt
+        # and/or the restored Obsidian context (each optional, injected
+        # independently); subsequent turns send the raw text.
+        if new_session and (system_prompt or obsidian_context):
+            blocks: list[str] = []
+            if system_prompt:
+                blocks.append(
+                    f"Follow these instructions for the ENTIRE conversation:\n\n{system_prompt}"
                 )
-            payload = (
-                "Follow these instructions for the ENTIRE conversation:\n\n"
-                f"{system_prompt}{context_block}\n\n---\n\nFirst query: {text}"
+            if obsidian_context:
+                blocks.append(f"Restored context from your memory:\n\n{obsidian_context}")
+            preamble = "\n\n---\n\n".join(blocks)
+            payload = f"{preamble}\n\n---\n\nFirst query: {text}"
+            log.info(
+                "New OpenCode session — injected %s",
+                ", ".join(
+                    p
+                    for p, ok in [("system prompt", system_prompt), ("memory", obsidian_context)]
+                    if ok
+                ),
             )
-            log.info("New OpenCode session — system prompt injected")
         else:
             payload = text
 
