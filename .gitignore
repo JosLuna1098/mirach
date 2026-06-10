@@ -55,3 +55,6 @@ CLAUDE.md
 user_scripts/*.sh
 user_scripts/*.py
 !user_scripts/.gitkeep
+
+# Local planning / design scratch (never published — internal notes)
+planning/
