@@ -16,56 +16,50 @@ from mirach.logging_setup import log
 
 
 class AudioRecorder:
-    """Thread-safe microphone recorder with persistent InputStream.
+    """Microphone recorder that only holds the ALSA device while recording.
 
-    Opens the PortAudio InputStream once at startup and keeps it running
-    for the daemon's lifetime. A flag controls whether incoming frames are
-    accumulated, so no new ALSA PCM device is created per recording turn.
+    Uses PulseAudio via PortAudio (or PipeWire's PulseAudio compat layer)
+    so the microphone can be shared with other apps (Discord, browser, etc).
+    The InputStream is opened per recording turn and closed immediately after,
+    preventing exclusive ALSA PCM lock.
     """
 
     def __init__(self) -> None:
         self._frames: list[np.ndarray] = []
         self._frames_lock = threading.Lock()
         self._stream: sd.InputStream | None = None
-        self._device_idx: int | None = None
+        self._device_spec: str | int | None = None
         self._recording = False
 
     def detect_microphone(self) -> None:
-        """Select a microphone matching MIC_NAME, falling back to system default.
+        """Select a microphone matching MIC_NAME via PulseAudio, falling back to default.
 
-        Scans all input devices for one whose name contains the configured
-        substring and has input channels. Logs a warning if no match is found.
+        Stores a PulseAudio source name (or device index as fallback)
+        so the InputStream can be opened per-turn without holding it open.
         """
+        # Prefer PulseAudio host API for device sharing
+        api = sd.query_hostapis()
+        pulse_api = next((a for a in api if "pulse" in a["name"].lower()), None)
+        if pulse_api is not None:
+            sd.default.hostapi = api.index(pulse_api)
+            log.info("Using PulseAudio host API for device sharing")
+
         devices = sd.query_devices()
-        for i, d in enumerate(devices):
+        for _, d in enumerate(devices):
             if config.MIC_NAME.lower() in d["name"].lower() and d["max_input_channels"] > 0:
-                self._device_idx = i
-                log.info("Microphone selected: %s (idx=%d)", d["name"], i)
+                self._device_spec = d["name"]
+                log.info("Microphone selected: %s", d["name"])
                 return
         log.warning("Microphone '%s' not found, using system default", config.MIC_NAME)
+        self._device_spec = None
 
     def open(self) -> None:
-        """Open and start the InputStream. Called once at daemon startup."""
-        if self._stream is not None:
-            return
-        self._stream = sd.InputStream(
-            samplerate=config.SAMPLE_RATE,
-            channels=1,
-            dtype="float32",
-            callback=self._callback,
-            device=self._device_idx,
-        )
-        self._stream.start()
-        log.info("Audio InputStream opened (persistent)")
+        """No-op: stream is opened per recording turn instead."""
+        pass
 
     def close(self) -> None:
-        """Stop and close the InputStream. Called once at daemon shutdown."""
-        self._recording = False
-        if self._stream is not None:
-            self._stream.stop()
-            self._stream.close()
-            self._stream = None
-            log.info("Audio InputStream closed")
+        """No-op: stream is closed per recording turn instead."""
+        pass
 
     def _callback(self, indata: np.ndarray, frames: int, time_info, status) -> None:
         """sounddevice callback: only accumulate frames when recording."""
@@ -74,18 +68,27 @@ class AudioRecorder:
                 self._frames.append(indata.copy())
 
     def start(self) -> None:
-        """Begin recording by clearing the buffer and enabling accumulation."""
+        """Open a fresh InputStream and begin recording."""
         with self._frames_lock:
             self._frames.clear()
+        self._stream = sd.InputStream(
+            samplerate=config.SAMPLE_RATE,
+            channels=1,
+            dtype="float32",
+            callback=self._callback,
+            device=self._device_spec,
+        )
+        self._stream.start()
         self._recording = True
         log.info("Recording started")
 
     def stop(self) -> np.ndarray | None:
-        """Stop recording and return concatenated audio, or None if empty.
-
-        Does NOT close the stream — it stays open for the next turn.
-        """
+        """Stop recording, close the InputStream, and return concatenated audio."""
         self._recording = False
+        if self._stream is not None:
+            self._stream.stop()
+            self._stream.close()
+            self._stream = None
         with self._frames_lock:
             if not self._frames:
                 return None
