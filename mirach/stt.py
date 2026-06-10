@@ -42,13 +42,22 @@ def _downsample(audio: np.ndarray, src_sr: int, dst_sr: int) -> np.ndarray:
         g = gcd(src_sr, dst_sr)
         return resample_poly(audio, dst_sr // g, src_sr // g).astype(np.float32)
 
-    # Fallback: integer-factor decimation with a moving-average low-pass filter.
-    factor = max(src_sr // dst_sr, 1)
-    if factor == 1:
-        return audio.astype(np.float32)
-    kernel = np.ones(factor, dtype=np.float32) / factor
-    filtered = np.convolve(audio.astype(np.float32), kernel, mode="same")
-    return filtered[::factor]
+    # Fallback (no scipy): anti-alias low-pass then linear resample to the exact
+    # target rate. Unlike plain audio[::factor] decimation, this reaches dst_sr
+    # even when src_sr/dst_sr is not an integer (e.g. 44100 → 16000).
+    audio = audio.astype(np.float32)
+    ratio = src_sr / dst_sr
+    if ratio <= 1:
+        return audio
+    win = max(1, int(round(ratio)))
+    kernel = np.ones(win, dtype=np.float32) / win
+    filtered = np.convolve(audio, kernel, mode="same")
+    n_out = int(round(len(filtered) * dst_sr / src_sr))
+    if n_out <= 0:
+        return np.zeros(0, dtype=np.float32)
+    x_old = np.arange(len(filtered), dtype=np.float32)
+    x_new = np.linspace(0, len(filtered) - 1, n_out, dtype=np.float32)
+    return np.interp(x_new, x_old, filtered).astype(np.float32)
 
 
 class WhisperTranscriber:

@@ -2,6 +2,7 @@
 
 import numpy as np
 
+import mirach.stt as stt
 from mirach.stt import _downsample
 
 
@@ -30,3 +31,24 @@ def test_dc_signal_stays_dc():
     # Boxcar filter at the boundaries can dip; check the middle.
     mid = out[len(out) // 4 : 3 * len(out) // 4]
     assert np.allclose(mid, 0.5, atol=1e-5)
+
+
+def test_fallback_reaches_exact_rate_non_integer_ratio(monkeypatch):
+    """Without scipy, a non-integer ratio (44100→16000) must still hit dst_sr.
+
+    Plain audio[::factor] decimation would yield 22050 Hz here; the linear
+    fallback must produce exactly len(audio) * dst_sr / src_sr samples.
+    """
+    monkeypatch.setattr(stt, "_HAS_SCIPY", False)
+    audio = np.zeros(44100, dtype=np.float32)  # 1 second @ 44.1 kHz
+    out = _downsample(audio, 44100, 16000)
+    assert out.dtype == np.float32
+    assert out.shape[0] == 16000
+
+
+def test_fallback_integer_ratio_length(monkeypatch):
+    """Without scipy, the classic 48k→16k path still yields exactly 16000 samples."""
+    monkeypatch.setattr(stt, "_HAS_SCIPY", False)
+    audio = np.zeros(48000, dtype=np.float32)
+    out = _downsample(audio, 48000, 16000)
+    assert out.shape[0] == 16000
