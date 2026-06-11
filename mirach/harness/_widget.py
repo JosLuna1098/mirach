@@ -61,6 +61,41 @@ body {
 .msg.live { background: #1e2a1e; border: 1px solid #4caf50; }
 .msg.done { background: #1e2a1e; border: 1px solid #2a3a2a; }
 
+/* user message bubbles (right-aligned) */
+.msg.user {
+  align-self: flex-end; background: #1a2740; border: 1px solid #2c4a7a; color: #cfe0ff;
+}
+/* optimistic queued bubble — floats until its turn starts processing */
+.msg.user.queued {
+  background: #1e2230; border: 1px dashed #4a5570; color: #9aa6c0;
+  opacity: .7; font-style: italic;
+}
+
+/* processing placeholder (verbose off) */
+.msg.processing { color: #888; font-style: italic; }
+
+/* model reasoning / verbose accordion */
+details.think {
+  align-self: flex-start; max-width: 92%;
+  background: #161616; border: 1px solid #333;
+  border-radius: 8px; padding: 6px 10px;
+  font-family: monospace; font-size: 12px; color: #888;
+}
+details.think summary {
+  cursor: pointer; color: #999; font-family: system-ui; font-size: 12px;
+}
+details.think .think-body {
+  white-space: pre-wrap; word-break: break-word; margin-top: 6px; line-height: 1.5;
+}
+
+/* verbose toggle button */
+#btn-verbose {
+  padding: 5px 10px; font-size: 13px;
+  background: #2a2a2a; color: #888;
+  border: none; border-radius: 6px; cursor: pointer;
+}
+#btn-verbose.on { background: #1b3a5c; color: #cfe0ff; }
+
 /* error notice */
 .err-notice {
   align-self: flex-start; max-width: 88%;
@@ -132,6 +167,7 @@ body {
 <div id="header">
   <div id="dot"></div>
   <h1>Mirach</h1>
+  <button id="btn-verbose" title="Mostrar razonamiento del modelo">&#129504;</button>
   <button id="btn-stop">Stop</button>
 </div>
 
@@ -149,7 +185,12 @@ const TOKEN = "__MIRACH_TOKEN__";
 // ── State ────────────────────────────────────────────────────────────
 let since      = 0;     // next event index for ?since= on reconnect
 let es         = null;
-let liveBubble = null;  // streaming bubble in progress, or null
+let liveStream = '';    // raw streamed text of the turn in progress
+let liveBox    = null;  // live container: thinking accordion or "procesando…"
+let pendingQueued = []; // optimistic queued bubbles awaiting their user_turn event
+// Verbose = show the model's working stream live. Persisted per device
+// (UI preference, not conversation state — the bus stays source of truth).
+let verboseOn  = localStorage.getItem('mirach-verbose') !== '0';
 
 // ── DOM refs ─────────────────────────────────────────────────────────
 const dot        = document.getElementById('dot');
@@ -157,6 +198,7 @@ const transcript = document.getElementById('transcript');
 const msgInput   = document.getElementById('msg');
 const btnSend    = document.getElementById('btn-send');
 const btnStop    = document.getElementById('btn-stop');
+const btnVerbose = document.getElementById('btn-verbose');
 
 // ── Utilities ────────────────────────────────────────────────────────
 const esc = s => String(s)
@@ -164,6 +206,12 @@ const esc = s => String(s)
   .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 function scrollDown() { transcript.scrollTop = transcript.scrollHeight; }
+
+// Keep optimistic queued bubbles pinned to the bottom (in FIFO order) so they
+// visually "wait" below all settled content until their turn starts processing.
+function floatQueued() {
+  for (const p of pendingQueued) transcript.appendChild(p.el);
+}
 
 function api(path, body) {
   return fetch(path, {
@@ -174,28 +222,89 @@ function api(path, body) {
 }
 
 // ── Event renderers ──────────────────────────────────────────────────
-function onTextDelta(ev) {
-  if (!liveBubble) {
-    liveBubble = document.createElement('div');
-    liveBubble.className = 'msg live';
-    transcript.appendChild(liveBubble);
+function onQueued(ev) {
+  // A turn was enqueued (not yet processing): show it as a pending bubble that
+  // floats at the bottom until its user_turn event settles it.
+  const d = document.createElement('div');
+  d.className = 'msg user queued';
+  d.textContent = ev.text;
+  transcript.appendChild(d);
+  pendingQueued.push({el: d, text: ev.text});
+  scrollDown();
+}
+
+function onQueueCleared() {
+  // The pending queue was dropped (stop / clear_queue): remove floating bubbles.
+  for (const p of pendingQueued) p.el.remove();
+  pendingQueued = [];
+}
+
+function onUserTurn(ev) {
+  // A new user turn settles any still-open live stream (e.g. interrupted turn).
+  if (liveBox || liveStream) onDone({content: ''});
+  // Settle a matching optimistic queued bubble (FIFO by text); else render fresh
+  // (voice turns and other devices have no local optimistic bubble).
+  const i = pendingQueued.findIndex(p => p.text === ev.text);
+  if (i !== -1) {
+    const el = pendingQueued.splice(i, 1)[0].el;
+    el.className = 'msg user';
+    transcript.appendChild(el);  // re-anchor at bottom so its response follows it
+  } else {
+    const d = document.createElement('div');
+    d.className = 'msg user';
+    d.textContent = ev.text;
+    transcript.appendChild(d);
   }
-  liveBubble.textContent += ev.delta;
+  scrollDown();
+}
+
+function onTextDelta(ev) {
+  liveStream += ev.delta;
+  if (!liveBox) {
+    if (verboseOn) {
+      liveBox = document.createElement('details');
+      liveBox.className = 'think';
+      liveBox.open = true;
+      liveBox.innerHTML = '<summary>&#129504; trabajando…</summary><div class="think-body"></div>';
+    } else {
+      liveBox = document.createElement('div');
+      liveBox.className = 'msg processing';
+      liveBox.textContent = 'procesando…';
+    }
+    transcript.appendChild(liveBox);
+  }
+  const body = liveBox.querySelector ? liveBox.querySelector('.think-body') : null;
+  if (body) body.textContent = liveStream;
   scrollDown();
 }
 
 function onDone(ev) {
-  if (liveBubble) {
-    liveBubble.className = 'msg done';
-    liveBubble = null;
-  } else if (ev.content) {
-    // Replay path: turn already finished, render final text directly
-    const d = document.createElement('div');
-    d.className = 'msg done';
-    d.textContent = ev.content;
+  const streamed = liveStream;
+  liveStream = '';
+  if (liveBox) { liveBox.remove(); liveBox = null; }
+  const content = ev.content || '';
+
+  // If the stream carried noticeably more than the final answer, it contained
+  // reasoning/work — keep it available in a collapsed accordion (verbose only).
+  const hadVerbose = streamed && content && streamed.length > content.length * 1.5;
+  if (verboseOn && hadVerbose) {
+    const d = document.createElement('details');
+    d.className = 'think';
+    d.innerHTML = '<summary>&#129504; proceso</summary><div class="think-body"></div>';
+    d.querySelector('.think-body').textContent = streamed;
     transcript.appendChild(d);
-    scrollDown();
   }
+
+  // Final answer bubble: done.content (clean, what TTS speaks). On interrupt
+  // (empty content) keep whatever streamed so the partial turn stays readable.
+  const finalText = content || streamed;
+  if (finalText) {
+    const m = document.createElement('div');
+    m.className = 'msg done';
+    m.textContent = finalText;
+    transcript.appendChild(m);
+  }
+  scrollDown();
 }
 
 function onToolCall(ev) {
@@ -259,6 +368,9 @@ function connect() {
     try { ev = JSON.parse(e.data); } catch { return; }
     since++;
     switch (ev.type) {
+      case 'queued':                onQueued(ev); break;
+      case 'queue_cleared':         onQueueCleared(); break;
+      case 'user_turn':             onUserTurn(ev); break;
       case 'text_delta':            onTextDelta(ev); break;
       case 'done':                  onDone(ev); break;
       case 'tool_call':             onToolCall(ev); break;
@@ -267,6 +379,8 @@ function connect() {
       case 'error':                 onError(ev); break;
       // 'cost' intentionally not rendered in the basic widget
     }
+    floatQueued();  // keep any still-queued bubbles anchored at the bottom
+    scrollDown();
   };
 
   es.onerror = () => {
@@ -286,6 +400,8 @@ function send() {
   if (!text) return;
   msgInput.value = '';
   btnSend.disabled = true;
+  // The pending bubble is driven by the server's 'queued' event (single source
+  // of truth) so it replays on resume and shows on every device — not optimism.
   api('/turn', {text, interrupt: false, clear_queue: false})
     .finally(() => { btnSend.disabled = msgInput.value.trim().length === 0; });
 }
@@ -294,7 +410,18 @@ msgInput.addEventListener('input',   () => { btnSend.disabled = msgInput.value.t
 msgInput.addEventListener('keydown', e  => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
 btnSend.addEventListener('click', send);
 
+// Pending bubbles are cleared by the server's 'queue_cleared' event (round-trip),
+// keeping the bus the single source of truth across reloads and devices.
 btnStop.addEventListener('click', () => api('/stop', {}));
+
+// ── Verbose toggle ───────────────────────────────────────────────────
+function renderVerboseBtn() { btnVerbose.classList.toggle('on', verboseOn); }
+btnVerbose.addEventListener('click', () => {
+  verboseOn = !verboseOn;
+  localStorage.setItem('mirach-verbose', verboseOn ? '1' : '0');
+  renderVerboseBtn();
+});
+renderVerboseBtn();
 </script>
 
 </body>
