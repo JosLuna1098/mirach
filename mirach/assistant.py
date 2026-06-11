@@ -284,6 +284,13 @@ class Assistant:
                 self._check_interrupted()
                 notify.notify(i18n.t("you_said"), text)
 
+            # Publish the user's turn to the bus so every connected client renders
+            # the user side of the shared conversation (and replays it on resume).
+            with contextlib.suppress(Exception):
+                from mirach.harness.events import UserTurnEvent
+
+                self.bus.publish(UserTurnEvent(text=text))
+
             # Step 3: Check built-in triggers (bypass LLM)
             builtin = self._match_builtin_trigger(text)
             if builtin:
@@ -392,9 +399,12 @@ class Assistant:
         if interrupt:
             self._interrupt_current()
             with self._state_lock:
+                cleared = clear_queue and bool(self._queue)
                 if clear_queue:
                     self._queue.clear()
                 self._queue.appendleft(text)
+            if cleared:
+                self._publish_queue_cleared()
             self._resume_after_interrupt()
             self._maybe_start_next()
             return {"status": "accepted", "position": 1}
@@ -404,6 +414,11 @@ class Assistant:
                 return {"status": "rejected", "reason": "queue_full"}
             self._queue.append(text)
             position = len(self._queue)
+        # Publish before draining so the 'queued' event always precedes the
+        # 'user_turn' that settles it in the bus history (clean replay on resume).
+        from mirach.harness.events import QueuedTurnEvent
+
+        self._publish_event(QueuedTurnEvent(text=text))
         self._maybe_start_next()
         return {"status": "queued", "position": position}
 
@@ -415,7 +430,10 @@ class Assistant:
         """
         self._interrupt_current()
         with self._state_lock:
+            had_queued = bool(self._queue)
             self._queue.clear()
+        if had_queued:
+            self._publish_queue_cleared()
         self._resume_after_interrupt()
         log.info("Stopped: current run cancelled and queue cleared")
 
@@ -430,6 +448,17 @@ class Assistant:
     def reset_session(self) -> None:
         """End the current LLM session (maps to POST /close_session on the HTTP server)."""
         self._llm.reset_session()
+
+    def _publish_event(self, event) -> None:
+        """Publish to the backend's bus, swallowing any backend/bus failure."""
+        with contextlib.suppress(Exception):
+            self.bus.publish(event)
+
+    def _publish_queue_cleared(self) -> None:
+        """Tell clients the pending queue was dropped (stop / clear_queue)."""
+        from mirach.harness.events import QueueClearedEvent
+
+        self._publish_event(QueueClearedEvent())
 
     # ── Slot arbitration (queue drain vs. voice vs. interrupt) ──────────
 

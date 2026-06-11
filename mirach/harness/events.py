@@ -13,6 +13,51 @@ _V = 1  # current event schema version
 
 
 @dataclass
+class QueuedTurnEvent:
+    """A text turn appended to the queue, not yet processing.
+
+    Published at enqueue time so clients render a "pending" bubble immediately
+    (and on resume show turns still waiting). The matching UserTurnEvent, emitted
+    when the turn starts processing, settles it. QueueClearedEvent drops pending
+    turns that were cancelled (stop / clear_queue) so resume shows no ghosts.
+    """
+
+    text: str
+    type: Literal["queued"] = "queued"
+    version: int = _V
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclass
+class QueueClearedEvent:
+    """The pending queue was cleared (stop / clear_queue): drop pending bubbles."""
+
+    type: Literal["queue_cleared"] = "queue_cleared"
+    version: int = _V
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclass
+class UserTurnEvent:
+    """A turn submitted by the user (voice transcript or typed text).
+
+    Published at the start of every turn so all connected clients render the
+    user's side of the shared conversation and replay it on resume.
+    """
+
+    text: str
+    type: Literal["user_turn"] = "user_turn"
+    version: int = _V
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclass
 class TextDeltaEvent:
     delta: str
     type: Literal["text_delta"] = "text_delta"
@@ -90,7 +135,10 @@ class CostEvent:
 
 
 Event = (
-    TextDeltaEvent
+    QueuedTurnEvent
+    | QueueClearedEvent
+    | UserTurnEvent
+    | TextDeltaEvent
     | ToolCallEvent
     | ToolResultEvent
     | AwaitingConfirmationEvent

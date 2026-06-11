@@ -111,6 +111,32 @@ def test_submit_empty_text_rejected(asst):
     assert asst._fake.calls == []
 
 
+def test_enqueue_publishes_queued_event_and_stop_clears(asst):
+    fake = asst._fake
+    events = []
+    asst.bus.subscribe(events.append)
+    fake.block()
+
+    asst.submit_turn("A")  # starts processing (blocked) but still emits queued
+    assert _wait_until(lambda: fake.calls == ["A"])
+    asst.submit_turn("B")  # waits behind A
+    assert _wait_until(lambda: list(asst._queue) == ["B"])
+
+    queued_texts = [e.text for e in events if e.type == "queued"]
+    assert queued_texts == ["A", "B"]
+
+    asst.stop()  # clears the queue and announces it
+    assert _wait_until(lambda: any(e.type == "queue_cleared" for e in events))
+    assert len(asst._queue) == 0
+
+
+def test_stop_with_empty_queue_does_not_announce(asst):
+    events = []
+    asst.bus.subscribe(events.append)
+    asst.stop()  # nothing queued → no queue_cleared noise
+    assert not any(e.type == "queue_cleared" for e in events)
+
+
 def test_queue_full_rejects(asst):
     fake = asst._fake
     fake.block()
