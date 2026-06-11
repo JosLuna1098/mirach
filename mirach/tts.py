@@ -204,7 +204,14 @@ class PiperSpeaker:
             stream.stop()
             log.info("TTS done (%.2fs total)", time.time() - t0)
         except sd.PortAudioError as e:
-            log.error("TTS audio error: %s", e)
+            # interrupt()/stop() abort()s the stream from another thread to cut
+            # playback off immediately; that unblocks this in-flight write() by
+            # raising here (typically PaErrorCode -9999). When the abort flag is
+            # set it is expected teardown, not a fault — don't cry wolf.
+            if self._aborted.is_set():
+                log.debug("TTS playback aborted: %s", e)
+            else:
+                log.error("TTS audio error: %s", e)
 
     def _play_wav(self, path: str) -> None:
         """Play a pre-rendered WAV file through the persistent OutputStream."""
