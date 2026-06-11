@@ -17,6 +17,8 @@ from mirach.harness.events import (
     DoneEvent,
     ErrorEvent,
     TextDeltaEvent,
+    ToolCallEvent,
+    ToolResultEvent,
 )
 from mirach.harness.policy.engine import Decision, PolicyEngine
 from mirach.harness.providers.opencode import (
@@ -264,6 +266,144 @@ def test_query_multiple_parts_concatenated():
         result = backend.query("hi", "")
     # part_texts = {"p1": "foo", "p2": "bar"} → joined: "foobar"
     assert result.response == "foobar"
+
+
+def test_query_final_text_from_rest_excludes_reasoning():
+    """The response comes from the REST message store's text parts, not the raw
+    stream — reasoning that leaked into streamed deltas is excluded."""
+    backend = _make_backend()
+    sse = [
+        # Reasoning deltas arrive BEFORE any part.updated reveals their type
+        # (the real-world ordering that defeats live filtering).
+        _text_delta("pr", "Thinking hard about math... the answer is 8."),
+        _text_delta("pt", "8"),
+        _session_idle(),
+    ]
+    rest = {
+        "/message": [
+            {"info": {"role": "user"}, "parts": [{"type": "text", "text": "4+4?"}]},
+            {
+                "info": {"role": "assistant"},
+                "parts": [
+                    {"type": "reasoning", "text": "Thinking hard about math... the answer is 8."},
+                    {"type": "text", "text": "8"},
+                ],
+            },
+        ]
+    }
+    with patch("urllib.request.urlopen", side_effect=_mock_urlopen(sse, rest)):
+        result = backend.query("4+4?", "")
+    assert result.response == "8"
+
+
+def test_query_reasoning_parts_excluded():
+    """Deltas belonging to a reasoning part never reach the response or the bus."""
+    bus = ConversationBus()
+    received: list[object] = []
+    bus.subscribe(received.append)
+
+    backend = _make_backend(bus=bus)
+    sse = [
+        {
+            "type": "message.part.updated",
+            "properties": {"sessionID": "sess-1", "part": {"id": "pr", "type": "reasoning"}},
+        },
+        {
+            "type": "message.part.updated",
+            "properties": {"sessionID": "sess-1", "part": {"id": "pt", "type": "text"}},
+        },
+        _text_delta("pr", "I am thinking about math. "),
+        _text_delta("pt", "8"),
+        _session_idle(),
+    ]
+    with patch("urllib.request.urlopen", side_effect=_mock_urlopen(sse)):
+        result = backend.query("4+4?", "")
+
+    assert result.response == "8"
+    deltas = [e.delta for e in received if isinstance(e, TextDeltaEvent)]
+    assert deltas == ["8"]
+
+
+def test_query_tool_parts_publish_call_and_result_once():
+    """Tool part state transitions emit one tool_call and one tool_result."""
+    bus = ConversationBus()
+    received: list[object] = []
+    bus.subscribe(received.append)
+
+    backend = _make_backend(bus=bus)
+
+    def tool_part(status: str, **state_extra) -> dict:
+        return {
+            "type": "message.part.updated",
+            "properties": {
+                "sessionID": "sess-1",
+                "part": {
+                    "id": "ptool",
+                    "type": "tool",
+                    "callID": "call-1",
+                    "tool": "bash",
+                    "state": {"status": status, "input": {"command": "ls"}, **state_extra},
+                },
+            },
+        }
+
+    sse = [
+        tool_part("pending"),
+        tool_part("running"),
+        tool_part("completed", output="file1\nfile2", title="ls"),
+        _text_delta("pt", "Two files."),
+        _session_idle(),
+    ]
+    with patch("urllib.request.urlopen", side_effect=_mock_urlopen(sse)):
+        result = backend.query("list files", "")
+
+    calls = [e for e in received if isinstance(e, ToolCallEvent)]
+    results = [e for e in received if isinstance(e, ToolResultEvent)]
+    assert len(calls) == 1
+    assert calls[0].name == "bash"
+    assert calls[0].arguments == {"command": "ls"}
+    assert len(results) == 1
+    assert results[0].result == "file1\nfile2"
+    assert not results[0].error
+    assert result.response == "Two files."
+
+
+def test_permission_asked_new_format_allow():
+    """v1.14+ permission.asked (permission/patterns/tool.callID) is understood."""
+    policy = MagicMock(spec=PolicyEngine)
+    policy.check.return_value = Decision.ALLOW
+
+    backend = _make_backend(policy=policy)
+    perm_event = {
+        "type": "permission.asked",
+        "properties": {
+            "id": "per-9",
+            "sessionID": "sess-1",
+            "permission": "bash",
+            "patterns": ["ls"],
+            "metadata": {},
+            "always": ["always"],
+            "tool": {"messageID": "m1", "callID": "c9"},
+        },
+    }
+    sse = [perm_event, _text_delta("p1", "done"), _session_idle()]
+
+    posted: list[tuple[str, dict]] = []
+
+    def _urlopen(req, timeout=None):
+        url = req if isinstance(req, str) else req.full_url
+        if "/event" in url:
+            return _FakeResp(_make_sse_bytes(*sse))
+        if hasattr(req, "data") and req.data:
+            posted.append((url, json.loads(req.data)))
+        return _FakeResp(b"{}")
+
+    with patch("urllib.request.urlopen", side_effect=_urlopen):
+        backend.query("list files", "")
+
+    policy.check.assert_called_once_with("bash", {"command": "ls"})
+    perm_replies = [(u, b) for u, b in posted if "permissions/per-9" in u]
+    assert perm_replies and perm_replies[0][1] == {"response": "once"}
 
 
 # ── query: session error ──────────────────────────────────────────────────────

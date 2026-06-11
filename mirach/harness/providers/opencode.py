@@ -21,6 +21,8 @@ from mirach.harness.events import (
     DoneEvent,
     ErrorEvent,
     TextDeltaEvent,
+    ToolCallEvent,
+    ToolResultEvent,
 )
 from mirach.harness.policy.engine import Decision, PolicyEngine
 from mirach.llm_types import LLMResult, _strip_markdown
@@ -93,6 +95,8 @@ class OpenCodeServeBackend:
             f"--hostname={self._host}",
             f"--port={self._port}",
         ]
+        if config.OPENCODE_SERVE_LOG:
+            args.append("--print-logs")
         self._proc = subprocess.Popen(
             args,
             stdout=subprocess.PIPE,
@@ -111,10 +115,39 @@ class OpenCodeServeBackend:
                 if m:
                     self._base_url = m.group(1).rstrip("/")
                     log.info("opencode serve started at %s", self._base_url)
+                    self._start_stdout_drain()
                     return
         raise RuntimeError(
             f"opencode serve did not start within {self._startup_timeout}s. Output: {output_lines}"
         )
+
+    def _start_stdout_drain(self) -> None:
+        """Drain opencode serve's stdout for the life of the process.
+
+        stdout is a PIPE we stop reading after the startup line. opencode keeps
+        logging (every HTTP request + plugins), so without draining, the OS pipe
+        buffer (~64KB) fills and opencode blocks on its next write — deadlocking
+        the server mid-turn (turns hang / time out). A daemon thread reads and
+        discards (debug-logs) the rest so the pipe never fills.
+        """
+
+        log_path = config.OPENCODE_SERVE_LOG
+
+        def _drain() -> None:
+            sink = None
+            with contextlib.suppress(Exception):
+                if log_path:
+                    sink = open(log_path, "w", buffering=1)  # noqa: SIM115
+                for line in self._proc.stdout:  # type: ignore[union-attr]
+                    if sink is not None:
+                        sink.write(line)
+                    else:
+                        log.debug("opencode: %s", line.rstrip())
+            if sink is not None:
+                with contextlib.suppress(Exception):
+                    sink.close()
+
+        threading.Thread(target=_drain, daemon=True, name="opencode-stdout-drain").start()
 
     def stop(self) -> None:
         """Terminate the opencode serve subprocess."""
@@ -184,6 +217,14 @@ class OpenCodeServeBackend:
         sse_req = urllib.request.Request(sse_url, headers={"Accept": "text/event-stream"})
 
         part_texts: dict[str, str] = {}
+        # partID → part type ("text" | "reasoning" | "tool" | ...), learned from
+        # message.part.updated. Reasoning parts also stream field=="text" deltas,
+        # and must NOT reach the spoken/displayed response.
+        part_kinds: dict[str, str] = {}
+        # callIDs whose tool_call / tool_result we already published (part.updated
+        # re-fires on every state change: pending → running → completed).
+        tool_called: set[str] = set()
+        tool_resulted: set[str] = set()
         error_msg = ""
 
         with urllib.request.urlopen(sse_req) as sse_resp:
@@ -196,17 +237,29 @@ class OpenCodeServeBackend:
                     etype = event.get("type")
                     props = event.get("properties", {})
 
-                    if etype == "message.part.delta":
+                    if etype == "message.part.updated":
+                        part = props.get("part") or {}
+                        part_id = part.get("id", "")
+                        if part_id:
+                            part_kinds[part_id] = part.get("type", "")
+                        if part.get("type") == "tool":
+                            self._publish_tool_part(part, tool_called, tool_resulted)
+
+                    elif etype == "message.part.delta":
                         # Each event carries one incremental text chunk.
                         # field=="text" → assistant prose; other fields (e.g. "input") are tool args.
                         if props.get("field") == "text":
                             delta = props.get("delta", "")
                             part_id = props.get("partID", "")
+                            # Unknown partID falls back to "text" (losing prose is
+                            # worse than leaking a stray reasoning chunk).
+                            if part_kinds.get(part_id, "text") == "reasoning":
+                                continue
                             part_texts[part_id] = part_texts.get(part_id, "") + delta
                             if delta:
                                 self._bus.publish(TextDeltaEvent(delta=delta))
 
-                    elif etype == "permission.updated":
+                    elif etype in ("permission.updated", "permission.asked"):
                         self._handle_permission(props)
 
                     elif etype == "session.idle":
@@ -233,15 +286,25 @@ class OpenCodeServeBackend:
                 self._sse_resp = None
 
         if self._interrupted.is_set():
+            self._bus.publish(DoneEvent(content=""))
             return LLMResult("", new_session, True, time.time() - t0)
 
         if error_msg:
             self._bus.publish(ErrorEvent(message=error_msg))
             return LLMResult(i18n.t("generic_error"), new_session, False, time.time() - t0)
 
-        full_text = "".join(part_texts.values()).strip()
+        # The stream interleaves reasoning and answer deltas, and the part-type
+        # metadata (message.part.updated) often arrives after the deltas — so the
+        # accumulated text may still contain reasoning. The REST message store is
+        # authoritative: fetch the final assistant message and keep only its
+        # "text" parts. The streamed accumulation is used only if the REST fetch
+        # itself fails (None) — an empty-but-successful fetch means the model
+        # produced no answer text, and falling back would leak raw reasoning.
+        final_text = self._fetch_final_text()
+        full_text = final_text if final_text is not None else "".join(part_texts.values()).strip()
         if not full_text:
             log.warning("opencode serve: empty response")
+            self._bus.publish(DoneEvent(content=i18n.t("no_response")))
             return LLMResult(i18n.t("no_response"), new_session, False, time.time() - t0)
 
         response = _strip_markdown(full_text)
@@ -340,21 +403,95 @@ class OpenCodeServeBackend:
                     tokens = tk.get("input", 0) + tk.get("output", 0)
         return tokens
 
+    def _fetch_final_text(self) -> str | None:
+        """Authoritative answer text for the turn that just finished.
+
+        Reads GET /session/{id}/message and concatenates only the `"text"` parts
+        of the last assistant message — reasoning parts (chain-of-thought that
+        models like deepseek emit as a separate part) are thereby excluded from
+        TTS and the DoneEvent. Returns None on fetch failure (caller may fall
+        back to streamed text); returns "" when the fetch succeeded but the
+        model produced no answer text (caller must NOT fall back — the streamed
+        text would reintroduce the reasoning).
+        """
+        if not self._session_id or not self._base_url:
+            return None
+        try:
+            messages = self._http_get(f"/session/{self._session_id}/message")
+        except Exception as exc:
+            log.warning("could not fetch final message: %s", exc)
+            return None
+        last_assistant: dict | None = None
+        for msg in messages if isinstance(messages, list) else []:
+            info = msg.get("info", msg) if isinstance(msg, dict) else {}
+            if info.get("role") == "assistant":
+                last_assistant = msg
+        if not last_assistant:
+            return None
+        texts = [
+            p.get("text", "")
+            for p in last_assistant.get("parts", [])
+            if isinstance(p, dict) and p.get("type") == "text"
+        ]
+        return "".join(texts).strip()
+
     def reply_confirmation(self, allow: bool) -> None:
         """Signal a pending CONFIRM permission request from external code."""
         self._confirm_result = allow
         self._confirm_event.set()
 
+    # ── tool part → bus events ───────────────────────────────────────────
+
+    def _publish_tool_part(self, part: dict, called: set, resulted: set) -> None:
+        """Translate an opencode tool part state into tool_call/tool_result events.
+
+        part.updated fires on every state change (pending → running → completed/
+        error); the `called`/`resulted` sets keep each event published once.
+        """
+        call_id = part.get("callID") or part.get("id", "")
+        state = part.get("state") or {}
+        status = state.get("status", "")
+
+        if call_id not in called and status in ("running", "completed", "error"):
+            called.add(call_id)
+            self._bus.publish(
+                ToolCallEvent(
+                    id=call_id,
+                    name=part.get("tool", ""),
+                    arguments=state.get("input") or {},
+                )
+            )
+        if call_id not in resulted and status in ("completed", "error"):
+            resulted.add(call_id)
+            output = state.get("output") if status == "completed" else state.get("error", "")
+            self._bus.publish(
+                ToolResultEvent(
+                    tool_call_id=call_id,
+                    result=str(output or "")[:2000],
+                    error=status == "error",
+                )
+            )
+
     # ── permission handling ──────────────────────────────────────────────
 
     def _handle_permission(self, props: dict) -> None:
+        """Decide an opencode permission request against the harness policy.
+
+        Accepts both wire formats:
+        - legacy `permission.updated`: {id, sessionID, type, pattern, callID, title}
+        - v1.14+ `permission.asked` (PermissionRequest): {id, sessionID, permission,
+          patterns: [...], metadata, tool: {messageID, callID}}
+        """
         perm_id = props.get("id", "")
         session_id = props.get("sessionID") or self._session_id or ""
-        tool_type = props.get("type", "")
+        tool_type = props.get("type") or props.get("permission", "")
         pattern = props.get("pattern")
+        if pattern is None:
+            patterns = props.get("patterns") or []
+            pattern = patterns[0] if patterns else None
         title = props.get("title", tool_type)
         metadata = props.get("metadata", {}) or {}
-        call_id = props.get("callID", "")
+        call_id = props.get("callID", "") or (props.get("tool") or {}).get("callID", "")
 
         # Build args for PolicyEngine from OpenCode permission fields
         if tool_type == "bash":
@@ -372,6 +509,11 @@ class OpenCodeServeBackend:
             self._reply_permission(session_id, perm_id, "once")
 
         elif decision == Decision.DENY:
+            # Make the policy denial visible to clients — otherwise the tool
+            # silently fails and the user can't tell why nothing happened.
+            self._bus.publish(
+                ErrorEvent(message=f"[policy] {tool_type} denied: {pattern or title}")
+            )
             self._reply_permission(session_id, perm_id, "reject")
 
         else:  # CONFIRM
@@ -465,11 +607,17 @@ def _parse_sse(response: object, interrupted: threading.Event) -> Iterator[dict]
     Yields one dict per SSE event. Stops when the connection closes,
     `interrupted` is set, or `response.read()` raises.
     """
+    # read1() returns as soon as ANY bytes are available. A plain read(4096)
+    # blocks until the full 4096 bytes accumulate, which stalls short SSE turns
+    # for minutes (a whole turn's events are < 1KB) — the response sat unread
+    # until enough later events/keepalives filled the buffer. Fall back to
+    # read() for file-likes without read1 (e.g. test fakes).
+    read_available = getattr(response, "read1", None) or response.read  # type: ignore[union-attr]
     buf = b""
     try:
         while not interrupted.is_set():
             try:
-                chunk = response.read(4096)  # type: ignore[union-attr]
+                chunk = read_available(4096)
             except Exception:
                 break
             if not chunk:

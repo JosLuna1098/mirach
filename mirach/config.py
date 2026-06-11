@@ -102,6 +102,9 @@ OPENCODE_SERVE_CWD = _env("MIRACH_OPENCODE_SERVE_CWD", "")  # default: cwd at da
 OPENCODE_SERVE_STARTUP_TIMEOUT = _env_float("MIRACH_OPENCODE_SERVE_STARTUP_TIMEOUT", 15.0)
 OPENCODE_SERVE_PROVIDER_ID = _env("MIRACH_OPENCODE_SERVE_PROVIDER_ID", "")
 OPENCODE_SERVE_MODEL_ID = _env("MIRACH_OPENCODE_SERVE_MODEL_ID", "")
+# Diagnostic: if set to a path, launch opencode serve with --print-logs and tee
+# its stdout to that file (captures what opencode does during a hang). Empty = off.
+OPENCODE_SERVE_LOG = _env("MIRACH_OPENCODE_SERVE_LOG", "")
 # Policy file is shared with the native backend; set MIRACH_NATIVE_POLICY to override.
 
 # ── User feedback (beeps and fillers) ─────────────────────────────────
