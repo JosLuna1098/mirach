@@ -9,6 +9,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from mirach import config, i18n
+from mirach.harness.events import DoneEvent
 from mirach.llm_types import LLMResult, _strip_markdown
 from mirach.logging_setup import log
 
@@ -93,6 +94,7 @@ class NativeBackend:
 
         interrupted = self._interrupt.is_set() and not result_text
         if interrupted:
+            self._loop.bus.publish(DoneEvent(content=""))
             return LLMResult("", new_session, True, time.time() - t0)
 
         if not result_text:

@@ -43,6 +43,7 @@ class LLMBackend(Protocol):
 
 def _strip_markdown(text: str) -> str:
     """Remove markdown formatting so TTS reads naturally."""
+    text = re.sub(r"<think>[\s\S]*?</think>", "", text, flags=re.IGNORECASE)
     text = re.sub(r"\*{1,3}(.+?)\*{1,3}", r"\1", text, flags=re.DOTALL)
     text = re.sub(r"```[\s\S]*?```", "", text)
     text = re.sub(r"`([^`]+)`", r"\1", text)
