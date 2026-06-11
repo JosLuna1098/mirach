@@ -18,12 +18,9 @@ from mirach import config, i18n
 from mirach.harness.events import (
     AwaitingConfirmationEvent,
     ConversationBus,
-    CostEvent,
     DoneEvent,
     ErrorEvent,
     TextDeltaEvent,
-    ToolCallEvent,
-    ToolResultEvent,
 )
 from mirach.harness.policy.engine import Decision, PolicyEngine
 from mirach.llm_types import LLMResult, _strip_markdown
@@ -159,56 +156,60 @@ class OpenCodeServeBackend:
         if self._provider_id and self._model_id:
             body["model"] = {"providerID": self._provider_id, "modelID": self._model_id}
 
-        self._http_post(f"/session/{self._session_id}/prompt_async", body)
+        # Open the SSE connection BEFORE sending the prompt so we never miss
+        # events (including session.idle) that arrive before the first read().
+        params = urlencode({"directory": self._cwd})
+        sse_url = f"{self._base_url}/event?{params}"
+        sse_req = urllib.request.Request(sse_url, headers={"Accept": "text/event-stream"})
 
-        # Stream events; accumulate final text via part_id → full_text_so_far
         part_texts: dict[str, str] = {}
         error_msg = ""
 
-        try:
-            for event in self._iter_events():
-                etype = event.get("type")
-                props = event.get("properties", {})
+        with urllib.request.urlopen(sse_req) as sse_resp:
+            self._sse_resp = sse_resp
+            try:
+                # Prompt fires after SSE is open — no race condition.
+                self._http_post(f"/session/{self._session_id}/prompt_async", body)
 
-                if etype == "message.part.updated":
-                    part = props.get("part", {})
-                    delta = props.get("delta")
-                    self._handle_part(part, delta, part_texts)
+                for event in _parse_sse(sse_resp, self._interrupted):
+                    etype = event.get("type")
+                    props = event.get("properties", {})
 
-                elif etype == "message.updated":
-                    info = props.get("info", {})
-                    if info.get("role") == "assistant":
-                        tokens = info.get("tokens", {})
-                        self._bus.publish(
-                            CostEvent(
-                                input_tokens=tokens.get("input", 0),
-                                output_tokens=tokens.get("output", 0),
-                            )
-                        )
+                    if etype == "message.part.delta":
+                        # Each event carries one incremental text chunk.
+                        # field=="text" → assistant prose; other fields (e.g. "input") are tool args.
+                        if props.get("field") == "text":
+                            delta = props.get("delta", "")
+                            part_id = props.get("partID", "")
+                            part_texts[part_id] = part_texts.get(part_id, "") + delta
+                            if delta:
+                                self._bus.publish(TextDeltaEvent(delta=delta))
 
-                elif etype == "permission.updated":
-                    self._handle_permission(props)
+                    elif etype == "permission.updated":
+                        self._handle_permission(props)
 
-                elif etype == "session.idle":
-                    if props.get("sessionID", self._session_id) == self._session_id:
+                    elif etype == "session.idle":
+                        if props.get("sessionID", self._session_id) == self._session_id:
+                            break
+
+                    elif etype == "session.error":
+                        err = props.get("error") or {}
+                        if isinstance(err, dict):
+                            error_msg = err.get("data", {}).get("message", "unknown error")
+                        else:
+                            error_msg = str(err)
+                        log.error("opencode session error: %s", error_msg)
                         break
 
-                elif etype == "session.error":
-                    err = props.get("error") or {}
-                    if isinstance(err, dict):
-                        error_msg = err.get("data", {}).get("message", "unknown error")
-                    else:
-                        error_msg = str(err)
-                    log.error("opencode session error: %s", error_msg)
-                    break
+                    if self._interrupted.is_set():
+                        break
 
-                if self._interrupted.is_set():
-                    break
-
-        except Exception as exc:
-            if not self._interrupted.is_set():
-                log.exception("Error streaming opencode events: %s", exc)
-                error_msg = str(exc)
+            except Exception as exc:
+                if not self._interrupted.is_set():
+                    log.exception("Error streaming opencode events: %s", exc)
+                    error_msg = str(exc)
+            finally:
+                self._sse_resp = None
 
         if self._interrupted.is_set():
             return LLMResult("", new_session, True, time.time() - t0)
@@ -325,57 +326,6 @@ class OpenCodeServeBackend:
         except Exception as exc:
             log.warning("Permission reply failed: %s", exc)
 
-    # ── event part translation ───────────────────────────────────────────
-
-    def _handle_part(self, part: dict, delta: str | None, part_texts: dict[str, str]) -> None:
-        ptype = part.get("type")
-
-        if ptype == "text" and not part.get("synthetic"):
-            part_texts[part.get("id", "")] = part.get("text", "")
-            if delta:
-                self._bus.publish(TextDeltaEvent(delta=delta))
-
-        elif ptype == "tool":
-            state = part.get("state", {})
-            status = state.get("status")
-            tool_name = part.get("tool", "")
-            call_id = part.get("callID", part.get("id", ""))
-
-            if status == "pending":
-                self._bus.publish(
-                    ToolCallEvent(
-                        id=call_id,
-                        name=tool_name,
-                        arguments=state.get("input", {}),
-                    )
-                )
-
-            elif status in ("completed", "error"):
-                output = (
-                    state.get("output", "") if status == "completed" else state.get("error", "")
-                )
-                self._bus.publish(
-                    ToolResultEvent(
-                        tool_call_id=call_id,
-                        result=str(output),
-                        error=(status == "error"),
-                    )
-                )
-
-    # ── SSE streaming ────────────────────────────────────────────────────
-
-    def _iter_events(self) -> Iterator[dict]:
-        """Open GET /event and yield parsed event dicts until the stream closes."""
-        params = urlencode({"directory": self._cwd})
-        url = f"{self._base_url}/event?{params}"
-        req = urllib.request.Request(url, headers={"Accept": "text/event-stream"})
-        with urllib.request.urlopen(req) as resp:  # type: ignore[arg-type]
-            self._sse_resp = resp
-            try:
-                yield from _parse_sse(resp, self._interrupted)
-            finally:
-                self._sse_resp = None
-
     # ── HTTP helpers ─────────────────────────────────────────────────────
 
     def _http_post(self, path: str, body: dict) -> dict:
@@ -435,6 +385,7 @@ def _parse_sse(response: object, interrupted: threading.Event) -> Iterator[dict]
             if not chunk:
                 break
             buf += chunk
+            buf = buf.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
             while b"\n\n" in buf:
                 msg, buf = buf.split(b"\n\n", 1)
                 data_lines = [
