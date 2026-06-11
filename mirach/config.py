@@ -46,7 +46,6 @@ LOG_PATH = LOGS_DIR / "daemon.log"
 SYSTEM_PROMPT_PATH = Path(_env("MIRACH_SYSTEM_PROMPT", str(BASE_DIR / "system_prompt.md")))
 SOCKET_PATH = _env("MIRACH_SOCKET", os.path.join(_TMP, "mirach.sock"))
 CACHE_DIR = Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache"))) / "mirach"
-SESSION_ID_PATH = CACHE_DIR / "session_id"
 
 # ── Obsidian vault (persistent memory) ────────────────────────────────
 OBSIDIAN_VAULT = Path(_env("MIRACH_OBSIDIAN_VAULT", str(Path.home() / "ObsidianVault")))
@@ -71,50 +70,12 @@ VOICE_NAME = _env("MIRACH_VOICE", "daniela.onnx")
 VOICE_PATH = VOICES_DIR / VOICE_NAME
 VOICE_SPEED = _env_float("MIRACH_VOICE_SPEED", 1.2)
 
-# ── LLM (OpenCode CLI) ────────────────────────────────────────────────
-OPENCODE_MODEL = _env("MIRACH_OPENCODE_MODEL", "opencode/deepseek-v4-flash-free")
-OPENCODE_TIMEOUT = _env_float("MIRACH_OPENCODE_TIMEOUT", 120.0)
-OPENCODE_TIMEOUT_CODING = _env_float("MIRACH_OPENCODE_TIMEOUT_CODING", 300.0)  # 5 min
-# Keywords used to detect coding-related queries for dynamic timeout extension.
-CODING_KEYWORDS = [
-    "script",
-    "code",
-    "programa",
-    "funcion",
-    "function",
-    "clase",
-    "class",
-    "modulo",
-    "module",
-    "api",
-    "bug",
-    "debug",
-    "compilar",
-    "compile",
-    "build",
-    "test",
-    "implementar",
-    "implement",
-    "algoritmo",
-    "algorithm",
-    "python",
-    "javascript",
-    "rust",
-    "bash",
-    "shell",
-    "crear un",
-    "crea un",
-    "escribir un",
-    "write a",
-    "generar",
-    "generate",
-]
 SESSION_IDLE_TIMEOUT = _env_float("MIRACH_SESSION_IDLE_TIMEOUT", 3600.0)  # 1 hour
 
 # ── Backend selection ─────────────────────────────────────────────────
-# MIRACH_BACKEND=opencode  (default) — delegate to opencode CLI (existing path)
-# MIRACH_BACKEND=native             — use the custom agentic harness (Phase 1)
-BACKEND = _env("MIRACH_BACKEND", "opencode")
+# MIRACH_BACKEND=opencode_serve  (default) — delegate to opencode serve (HTTP+SSE)
+# MIRACH_BACKEND=native                    — use the custom agentic harness (local LLMs)
+BACKEND = _env("MIRACH_BACKEND", "opencode_serve")
 
 # ── Native harness (MIRACH_BACKEND=native) ─────────────────────────────
 # NOTE (Ollama tool-calling compat — see planning/harness/model-compat.md):

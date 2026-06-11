@@ -29,7 +29,7 @@ from mirach.audio import AudioRecorder
 from mirach.conversation import ConversationLog
 from mirach.conversation_html import generate_and_open as show_conversation_html
 from mirach.ipc import SocketServer
-from mirach.llm import LLMBackend, OpenCodeBackend
+from mirach.llm_types import LLMBackend
 from mirach.logging_setup import log
 from mirach.obsidian_cache import ObsidianCache
 from mirach.stt import WhisperTranscriber
@@ -110,7 +110,9 @@ class Assistant:
 
             self._llm = build_opencode_serve_backend(speak_filler=self._tts.speak_filler)
         else:
-            self._llm = OpenCodeBackend(speak_filler=self._tts.speak_filler)
+            raise ValueError(
+                f"Unknown MIRACH_BACKEND={config.BACKEND!r}. Use 'native' or 'opencode_serve'."
+            )
         self._conv = ConversationLog()
         self._system_prompt = ""
         self._obsidian = ObsidianCache(config.OBSIDIAN_VAULT)

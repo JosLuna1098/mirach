@@ -1,6 +1,6 @@
 """Tests for the markdown stripper used before sending text to TTS."""
 
-from mirach.llm import _strip_markdown
+from mirach.llm_types import _strip_markdown
 
 
 def test_passthrough_plain_text():
