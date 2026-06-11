@@ -1,0 +1,116 @@
+# Mirach policy — copy to policy.yaml and customise.
+# policy.yaml is gitignored (like system_prompt.md); this example is versioned.
+#
+# The defaults below are restrictive on purpose: if policy.yaml is absent the
+# harness uses identical built-in defaults so a fresh install is always safe.
+#
+# Decision precedence (highest → lowest): deny > confirm > allow.
+# Shell pattern matching: prefix match on the full command string.
+
+version: 1
+
+defaults:
+
+  filesystem:
+    # Directories the agent may READ freely (empty = allow all reads).
+    # Uncomment and adjust to restrict:
+    # allow_read:
+    #   - ~/Projects
+    #   - ~/ObsidianVault
+
+    # Directories the agent may WRITE to without asking.
+    # Empty = all writes require confirmation.
+    allow_write: []
+    # allow_write:
+    #   - ~/Projects/scratch
+
+    # These paths are ALWAYS denied, even if listed in allow_write.
+    deny:
+      - ~/.ssh
+      - ~/.gnupg
+      - ~/.config
+      - /etc
+      - /usr
+      - /boot
+      - /sys
+      - /proc
+
+  shell:
+    # allowlist — only commands in `allow` run freely; everything else is denied
+    #             unless it matches a `confirm` prefix (then it waits for approval)
+    # denylist  — only commands in `deny` are blocked; everything else runs freely
+    # confirm_all — every command requires approval
+    mode: allowlist
+
+    # Run freely (safe, read-only or non-destructive):
+    allow:
+      - ls
+      - cat
+      - grep
+      - rg
+      - find
+      - echo
+      - pwd
+      - git status
+      - git diff
+      - git log
+      - git show
+      - python
+      - python3
+    # Uncomment to allow more:
+    # - npm run
+    # - cargo build
+
+    # Pause and ask before running:
+    confirm:
+      - rm
+      - mv
+      - cp
+      - mkdir
+      - touch
+      - git push
+      - git commit
+      - git checkout
+      - git merge
+      - git reset
+      - pip install
+      - pip uninstall
+      - systemctl
+      - sudo
+      - curl
+      - wget
+      - chmod
+      - chown
+
+    # Never run, even if the user asks:
+    deny:
+      - rm -rf /
+      - rm -rf ~/.
+      - rm -fr /
+      - mkfs
+      - dd
+      - shutdown
+      - reboot
+      - halt
+      - ":(){:|:&};:"
+
+  network:
+    web_search: true
+    web_fetch:
+      allow_domains: ["*"]   # wildcard = all domains allowed
+      deny_domains: []
+      # Example to restrict fetching:
+      # allow_domains:
+      #   - github.com
+      #   - docs.python.org
+      # deny_domains:
+      #   - malicious.example.com
+
+  system_config:
+    require_confirmation: true
+
+guards:
+  # Strip system-prompt content from model output before it reaches TTS / the user.
+  never_reveal_system_prompt: true
+  # Abort the inner loop after this many tool calls in one turn (runaway guard).
+  max_tool_calls_per_turn: 25
