@@ -16,57 +16,18 @@ from __future__ import annotations
 
 import json
 import random
-import re
 import subprocess
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
 
 from mirach import config, i18n, notify
+from mirach.llm_types import LLMBackend, LLMResult, _strip_markdown
 from mirach.logging_setup import log
 
-
-@dataclass(slots=True)
-class LLMResult:
-    """Outcome of a single LLM query."""
-
-    response: str  # cleaned text ready for TTS, or "" if interrupted
-    new_session: bool  # was this the first turn of a fresh OpenCode session?
-    interrupted: bool  # did the user abort mid-query?
-    elapsed: float  # seconds spent waiting for OpenCode
-
-
-@runtime_checkable
-class LLMBackend(Protocol):
-    """Structural protocol for LLM backends. Swap by passing a different adapter to Assistant."""
-
-    def query(self, text: str, system_prompt: str, obsidian_context: str = "") -> LLMResult: ...
-    def interrupt(self) -> None: ...
-    def session_expired(self) -> bool: ...
-    def reset_session(self) -> None: ...
-
-
-def _strip_markdown(text: str) -> str:
-    """Remove markdown formatting so TTS reads naturally.
-
-    Strips: bold/italic, code blocks, inline code, headers, links,
-    tables, list markers, horizontal rules, and excessive whitespace.
-    """
-    text = re.sub(r"\*{1,3}(.+?)\*{1,3}", r"\1", text, flags=re.DOTALL)
-    text = re.sub(r"```[\s\S]*?```", "", text)
-    text = re.sub(r"`([^`]+)`", r"\1", text)
-    text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
-    text = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", text)
-    text = re.sub(r"\|[-: ]+\|[-| :]*\n?", "", text)
-    text = re.sub(r"\|", " ", text)
-    text = re.sub(r"^\s*[-*+]\s+", "", text, flags=re.MULTILINE)
-    text = re.sub(r"^\s*\d+\.\s+", "", text, flags=re.MULTILINE)
-    text = re.sub(r"^[-*_]{3,}$", "", text, flags=re.MULTILINE)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    text = re.sub(r"[ \t]+", " ", text)
-    return text.strip()
+# Re-exported for backward compatibility — prefer mirach.llm_types for new code
+# that must not pull in audio dependencies.
+__all__ = ["LLMResult", "LLMBackend", "_strip_markdown", "OpenCodeBackend"]
 
 
 def _is_coding_query(text: str) -> bool:
