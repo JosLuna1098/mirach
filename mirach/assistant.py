@@ -100,6 +100,13 @@ class Assistant:
         self._idle = threading.Event()
         self._idle.set()
 
+        # Channel of the turn currently being processed: "voice" (PC mic/Alt+Z) or
+        # "text" (widget / mobile / queue). A turn's answer leaves by the channel it
+        # entered: voice is spoken on the PC, text stays silent (rides the bus). Set
+        # at the top of _process(); read by the filler callback on the backend thread.
+        # Turns are serialized by the FSM, so a plain attribute is race-free.
+        self._active_channel = "voice"
+
         # Shared FIFO queue of pending text turns (from the widget / mobile app).
         # Guarded by _state_lock; drained when the FSM returns to IDLE. Voice turns
         # are not queued (they are interactive and foreground). See submit_turn().
@@ -114,11 +121,11 @@ class Assistant:
         elif config.BACKEND == "native":
             from mirach.harness.build import build_native_backend
 
-            self._llm = build_native_backend(speak_filler=self._tts.speak_filler)
+            self._llm = build_native_backend(speak_filler=self._on_filler)
         elif config.BACKEND == "opencode_serve":
             from mirach.harness.build import build_opencode_serve_backend
 
-            self._llm = build_opencode_serve_backend(speak_filler=self._tts.speak_filler)
+            self._llm = build_opencode_serve_backend(speak_filler=self._on_filler)
         else:
             raise ValueError(
                 f"Unknown MIRACH_BACKEND={config.BACKEND!r}. Use 'native' or 'opencode_serve'."
@@ -252,16 +259,18 @@ class Assistant:
 
     # ── Main pipeline ──────────────────────────────────────────────────
 
-    def _process(self, text: str | None = None) -> None:
+    def _process(self, text: str | None = None, *, channel: str = "voice") -> None:
         """Run the full pipeline: (stop recording → transcribe →) LLM → speak.
 
         Runs in a background thread. When `text` is None this is a voice turn and
         steps 1–2 capture+transcribe the recording; when `text` is given it is a
         text turn (widget / mobile / queue drain) that skips straight to the LLM.
-        Both paths share steps 3–6, so text and voice are symmetric (same triggers,
-        TTS, and conversation log). Always resets state to IDLE in the finally block
-        and then drains the next queued turn.
+        Both paths share steps 3–6, but the answer leaves by `channel`: a voice
+        turn is spoken on the PC, a text turn stays silent and rides the bus to the
+        widget (see _respond / _on_filler). Always resets state to IDLE in the
+        finally block and then drains the next queued turn.
         """
+        self._active_channel = channel
         started = time.time()
         try:
             if text is None:
@@ -298,10 +307,10 @@ class Assistant:
                 if handler == "conversation":
                     path = show_conversation_html()
                     if path:
-                        self._tts.speak(i18n.t(response_key))
+                        self._respond(i18n.t(response_key), channel)
                         self._conv.append(i18n.t("assistant"), i18n.t(response_key))
                     else:
-                        self._tts.speak(i18n.t("no_conversation"))
+                        self._respond(i18n.t("no_conversation"), channel)
                         self._conv.append(i18n.t("assistant"), i18n.t("no_conversation"))
                 return
 
@@ -310,7 +319,7 @@ class Assistant:
             if matched:
                 log.info("User script triggered: %s", matched.path.name)
                 subprocess.Popen([str(matched.path)], start_new_session=True)
-                self._tts.speak(matched.response)
+                self._respond(matched.response, channel)
                 self._conv.append(i18n.t("assistant"), matched.response)
                 return
 
@@ -330,20 +339,21 @@ class Assistant:
             if result.interrupted:
                 return
             if not result.response:
-                self._tts.speak(i18n.t("didnt_understand"))
+                self._respond(i18n.t("didnt_understand"), channel)
                 return
 
-            # Step 6: Speak the response
+            # Step 6: Deliver the response on the turn's channel (voice speaks; text
+            # already streamed to the bus, so on_bus=True keeps the PC silent).
             self._conv.append(i18n.t("assistant"), result.response)
             notify.notify(i18n.t("assistant"), result.response)
-            self._tts.speak(result.response)
+            self._respond(result.response, channel, on_bus=True)
             log.info("Pipeline complete in %.2fs", time.time() - started)
         except _Interrupted:
             log.info("Pipeline interrupted by user")
         except Exception as e:
             log.exception("Pipeline ERROR: %s", e)
             with contextlib.suppress(Exception):
-                self._tts.speak(i18n.t("error_occurred"))
+                self._respond(i18n.t("error_occurred"), channel)
         finally:
             self._set_state(State.IDLE)
             self._maybe_start_next()
@@ -449,6 +459,30 @@ class Assistant:
         """End the current LLM session (maps to POST /close_session on the HTTP server)."""
         self._llm.reset_session()
 
+    def _on_filler(self, phrase: str) -> None:
+        """Filler callback handed to the backend; silent on text-channel turns.
+
+        Fillers are PC audio, so they only play for a voice turn. Text turns
+        (widget / mobile) must not make the PC speak while the user waits.
+        """
+        if self._active_channel == "voice":
+            self._tts.speak_filler(phrase)
+
+    def _respond(self, text: str, channel: str, *, on_bus: bool = False) -> None:
+        """Deliver a response on the turn's channel.
+
+        Voice → speak it on the PC. Text → keep the PC silent; if the text isn't
+        already on the bus (canned replies — triggers, scripts, errors — not the
+        streamed LLM answer), publish a Done bubble so the widget transcript stays
+        complete.
+        """
+        if channel == "voice":
+            self._tts.speak(text)
+        elif not on_bus:
+            from mirach.harness.events import DoneEvent
+
+            self._publish_event(DoneEvent(content=text))
+
     def _publish_event(self, event) -> None:
         """Publish to the backend's bus, swallowing any backend/bus failure."""
         with contextlib.suppress(Exception):
@@ -513,7 +547,10 @@ class Assistant:
             text = self._queue.popleft()
             self._state = State.PROCESSING
         self._idle.clear()
-        threading.Thread(target=self._process, kwargs={"text": text}, daemon=True).start()
+        # Queued turns come from remote clients (widget / mobile) → text channel.
+        threading.Thread(
+            target=self._process, kwargs={"text": text, "channel": "text"}, daemon=True
+        ).start()
 
     # ── Entry point ────────────────────────────────────────────────────
 
