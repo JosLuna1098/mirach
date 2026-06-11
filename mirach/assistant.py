@@ -427,6 +427,10 @@ class Assistant:
         """Reject a mid-flight tool confirmation (relayed from the server)."""
         self._llm.deny(tool_call_id)
 
+    def reset_session(self) -> None:
+        """End the current LLM session (maps to POST /close_session on the HTTP server)."""
+        self._llm.reset_session()
+
     # ── Slot arbitration (queue drain vs. voice vs. interrupt) ──────────
 
     def _begin_recording(self) -> None:

@@ -110,6 +110,12 @@ BEEP_PROCESS_WAV = os.path.join(_TMP, "mirach_beep_process.wav")
 BEEP_SHUTDOWN_WAV = os.path.join(_TMP, "mirach_beep_shutdown.wav")
 FILLER_DELAY_SEC = _env_float("MIRACH_FILLER_DELAY", 6.0)
 
+# ── HTTP/SSE visibility server (Phase 3) ──────────────────────────────
+# Set MIRACH_SERVER_ENABLED=0 to disable the local API server entirely.
+SERVER_ENABLED = _env("MIRACH_SERVER_ENABLED", "1") == "1"
+SERVER_HOST = _env("MIRACH_SERVER_HOST", "127.0.0.1")
+SERVER_PORT = _env_int("MIRACH_SERVER_PORT", 7270)
+
 # ── Context management (both backends) ────────────────────────────────
 # Strategy: none (off) | sliding (drop oldest rounds) | summarize (LLM-summary prefix)
 # Default "none" keeps current behaviour unchanged until explicitly opted in.

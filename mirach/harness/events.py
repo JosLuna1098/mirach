@@ -140,3 +140,25 @@ class ConversationBus:
         """Return a copy of all events published since creation."""
         with self._lock:
             return list(self._history)
+
+    def attach(
+        self, callback: Subscriber, since: int = 0
+    ) -> tuple[list[Event], Callable[[], None]]:
+        """Atomic catch-up + subscribe.
+
+        Under a single lock: snapshots history[since:] and registers the
+        callback as a subscriber.  No event published after this call is lost
+        (no gap between replay and live stream).
+
+        Returns (replay, unsubscribe).  The caller should process the replay
+        list first, then read from whatever channel the callback feeds.
+        """
+        with self._lock:
+            replay = list(self._history[since:])
+            self._subscribers.append(callback)
+
+        def unsubscribe() -> None:
+            with self._lock, contextlib.suppress(ValueError):
+                self._subscribers.remove(callback)
+
+        return replay, unsubscribe
