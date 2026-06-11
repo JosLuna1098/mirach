@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from mirach.harness.events import ConversationBus
 
 
 @dataclass(slots=True)
@@ -29,6 +32,13 @@ class LLMBackend(Protocol):
     def interrupt(self) -> None: ...
     def session_expired(self) -> bool: ...
     def reset_session(self) -> None: ...
+
+    # Phase 3 (visibility): the backend exposes its ConversationBus so the daemon
+    # can stream events to remote clients, and answers mid-flight confirmations.
+    @property
+    def bus(self) -> ConversationBus: ...
+    def confirm(self, tool_call_id: str) -> None: ...
+    def deny(self, tool_call_id: str) -> None: ...
 
 
 def _strip_markdown(text: str) -> str:

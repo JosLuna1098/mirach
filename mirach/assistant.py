@@ -20,6 +20,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from enum import Enum, auto
 from pathlib import Path
@@ -46,6 +47,10 @@ class State(Enum):
 
 class _Interrupted(Exception):
     """Raised internally to unwind the pipeline when the user aborts the current run."""
+
+
+# Max text turns that may wait in the queue before new ones are rejected.
+MAX_QUEUE = 10
 
 
 @dataclass
@@ -94,6 +99,11 @@ class Assistant:
         self._interrupt = threading.Event()
         self._idle = threading.Event()
         self._idle.set()
+
+        # Shared FIFO queue of pending text turns (from the widget / mobile app).
+        # Guarded by _state_lock; drained when the FSM returns to IDLE. Voice turns
+        # are not queued (they are interactive and foreground). See submit_turn().
+        self._queue: deque[str] = deque()
 
         # Pipeline components (injectable for testing)
         self._tts = tts or PiperSpeaker()
@@ -242,32 +252,37 @@ class Assistant:
 
     # ── Main pipeline ──────────────────────────────────────────────────
 
-    def _process(self) -> None:
-        """Run the full pipeline: stop recording → transcribe → LLM → speak.
+    def _process(self, text: str | None = None) -> None:
+        """Run the full pipeline: (stop recording → transcribe →) LLM → speak.
 
-        Runs in a background thread. Handles interrupts, errors, and empty audio.
-        Always resets state to IDLE in the finally block.
+        Runs in a background thread. When `text` is None this is a voice turn and
+        steps 1–2 capture+transcribe the recording; when `text` is given it is a
+        text turn (widget / mobile / queue drain) that skips straight to the LLM.
+        Both paths share steps 3–6, so text and voice are symmetric (same triggers,
+        TTS, and conversation log). Always resets state to IDLE in the finally block
+        and then drains the next queued turn.
         """
         started = time.time()
         try:
-            # Step 1: Stop recording and validate audio length
-            audio = self._audio.stop()
-            if audio is None or len(audio) < config.SAMPLE_RATE * 0.5:
-                log.info("Empty or too-short audio")
-                self._tts.speak(i18n.t("nothing_recorded"))
-                return
+            if text is None:
+                # Step 1: Stop recording and validate audio length
+                audio = self._audio.stop()
+                if audio is None or len(audio) < config.SAMPLE_RATE * 0.5:
+                    log.info("Empty or too-short audio")
+                    self._tts.speak(i18n.t("nothing_recorded"))
+                    return
 
-            self._check_interrupted()
+                self._check_interrupted()
 
-            # Step 2: Transcribe
-            notify.notify(i18n.t("processing_title"), i18n.t("processing_body"), "microphone")
-            text = self._stt.transcribe(audio)
-            if not text:
-                self._tts.speak(i18n.t("didnt_hear"))
-                return
+                # Step 2: Transcribe
+                notify.notify(i18n.t("processing_title"), i18n.t("processing_body"), "microphone")
+                text = self._stt.transcribe(audio)
+                if not text:
+                    self._tts.speak(i18n.t("didnt_hear"))
+                    return
 
-            self._check_interrupted()
-            notify.notify(i18n.t("you_said"), text)
+                self._check_interrupted()
+                notify.notify(i18n.t("you_said"), text)
 
             # Step 3: Check built-in triggers (bypass LLM)
             builtin = self._match_builtin_trigger(text)
@@ -324,42 +339,148 @@ class Assistant:
                 self._tts.speak(i18n.t("error_occurred"))
         finally:
             self._set_state(State.IDLE)
+            self._maybe_start_next()
 
     # ── FSM: toggle ────────────────────────────────────────────────────
 
     def toggle(self) -> None:
         """Handle a hotkey press. Cycles through IDLE → RECORDING → PROCESSING.
 
-        If currently PROCESSING, interrupts the pipeline and starts a new recording.
+        If currently PROCESSING, interrupts the pipeline and starts a new recording
+        (the classic single-key behaviour). The interrupting voice turn takes the
+        slot to record — a pending text queue is preserved and drains afterwards.
         """
         with self._state_lock:
             current = self._state
 
         if current is State.PROCESSING:
-            # Interrupt the running pipeline and wait for it to release
-            log.info("User interrupt requested")
+            log.info("User interrupt requested (voice)")
+            self._interrupt_current()
+            # Claim the slot to RECORD before clearing the interrupt latch, so a
+            # queued text turn cannot drain into the slot first.
+            self._set_state(State.RECORDING)
+            self._resume_after_interrupt()
+            self._begin_recording()
+            return
+
+        if current is State.IDLE:
+            self._set_state(State.RECORDING)
+            self._begin_recording()
+        elif current is State.RECORDING:
+            self._set_state(State.PROCESSING)
+            threading.Thread(target=self._process, daemon=True).start()
+
+    # ── Text turns + queue (widget / mobile) ───────────────────────────
+
+    @property
+    def bus(self):
+        """The active backend's ConversationBus (the daemon's server streams it)."""
+        return self._llm.bus
+
+    def submit_turn(self, text: str, *, interrupt: bool = False, clear_queue: bool = False) -> dict:
+        """Submit a text turn from a remote client (widget / mobile / queue drain).
+
+        interrupt=False → append to the back of the queue (FIFO).
+        interrupt=True  → cancel the running turn and insert at the front (priority);
+                          clear_queue=True also drops the rest of the queue ("live mode").
+        Returns an acknowledgement dict the server relays to the client.
+        """
+        text = (text or "").strip()
+        if not text:
+            return {"status": "rejected", "reason": "empty"}
+
+        if interrupt:
+            self._interrupt_current()
+            with self._state_lock:
+                if clear_queue:
+                    self._queue.clear()
+                self._queue.appendleft(text)
+            self._resume_after_interrupt()
+            self._maybe_start_next()
+            return {"status": "accepted", "position": 1}
+
+        with self._state_lock:
+            if len(self._queue) >= MAX_QUEUE:
+                return {"status": "rejected", "reason": "queue_full"}
+            self._queue.append(text)
+            position = len(self._queue)
+        self._maybe_start_next()
+        return {"status": "queued", "position": position}
+
+    def stop(self) -> None:
+        """Hard stop: cancel the running turn AND clear the queue, then go idle.
+
+        The stop button on the widget / live mode, and the PC stop hotkey (IPC
+        'stop'). Submits no new turn.
+        """
+        self._interrupt_current()
+        with self._state_lock:
+            self._queue.clear()
+        self._resume_after_interrupt()
+        log.info("Stopped: current run cancelled and queue cleared")
+
+    def confirm(self, tool_call_id: str) -> None:
+        """Approve a mid-flight tool confirmation (relayed from the server)."""
+        self._llm.confirm(tool_call_id)
+
+    def deny(self, tool_call_id: str) -> None:
+        """Reject a mid-flight tool confirmation (relayed from the server)."""
+        self._llm.deny(tool_call_id)
+
+    # ── Slot arbitration (queue drain vs. voice vs. interrupt) ──────────
+
+    def _begin_recording(self) -> None:
+        """Beep, open the mic, and notify — the RECORDING entry actions."""
+        notify.play_beep(config.BEEP_START_WAV)
+        self._audio.start()
+        notify.notify(
+            i18n.t("recording_start_title"),
+            i18n.t("recording_start_body"),
+            "microphone-sensitivity-high",
+        )
+
+    def _interrupt_current(self) -> None:
+        """Cancel the in-flight turn (if any) and wait for the slot to free.
+
+        Leaves self._interrupt SET on purpose: this suppresses the cancelled
+        pipeline's own queue-drain (see _maybe_start_next) so the caller can
+        decide what runs next without a race. The caller MUST then call
+        _resume_after_interrupt() to clear the latch and re-enable TTS.
+        """
+        with self._state_lock:
+            state = self._state
+
+        if state is State.PROCESSING:
             self._interrupt.set()
             self._llm.interrupt()
             self._tts.interrupt()
             if not self._idle.wait(timeout=3.0):
                 log.warning("Pipeline did not release in 3s, forcing IDLE")
                 self._set_state(State.IDLE)
-            self._interrupt.clear()
-            self._tts.clear_interrupt()  # re-enable TTS for the new turn
-            current = State.IDLE  # fall through to start recording
+        elif state is State.RECORDING:
+            self._interrupt.set()
+            with contextlib.suppress(Exception):
+                self._audio.stop()
+            self._set_state(State.IDLE)
 
-        if current is State.IDLE:
-            self._set_state(State.RECORDING)
-            notify.play_beep(config.BEEP_START_WAV)
-            self._audio.start()
-            notify.notify(
-                i18n.t("recording_start_title"),
-                i18n.t("recording_start_body"),
-                "microphone-sensitivity-high",
-            )
-        elif current is State.RECORDING:
-            self._set_state(State.PROCESSING)
-            threading.Thread(target=self._process, daemon=True).start()
+    def _resume_after_interrupt(self) -> None:
+        """Clear the interrupt latch and re-enable TTS after an interrupt is handled."""
+        self._interrupt.clear()
+        self._tts.clear_interrupt()
+
+    def _maybe_start_next(self) -> None:
+        """If idle and a text turn is queued, pop it and start processing.
+
+        Skips while self._interrupt is set: an interrupt is in progress and its
+        caller is arranging the next state/queue, so the slot is spoken for.
+        """
+        with self._state_lock:
+            if self._interrupt.is_set() or self._state is not State.IDLE or not self._queue:
+                return
+            text = self._queue.popleft()
+            self._state = State.PROCESSING
+        self._idle.clear()
+        threading.Thread(target=self._process, kwargs={"text": text}, daemon=True).start()
 
     # ── Entry point ────────────────────────────────────────────────────
 
@@ -371,7 +492,10 @@ class Assistant:
         _install_shutdown_hooks(self)
         self.load()
         notify.notify(i18n.t("daemon_ready_title"), i18n.t("daemon_ready_body"))
-        SocketServer(on_toggle=self.toggle).serve_forever()
+        # Phase 3: the local HTTP/SSE server starts here in a parallel daemon
+        # thread, sharing this Assistant (self.bus, submit_turn, stop, confirm,
+        # deny). Added in the server-module session.
+        SocketServer(on_toggle=self.toggle, on_stop=self.stop).serve_forever()
 
     def shutdown(self) -> None:
         """Close persistent audio streams. Idempotent; safe to call at shutdown."""

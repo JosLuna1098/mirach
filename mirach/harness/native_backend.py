@@ -38,6 +38,19 @@ class NativeBackend:
 
     # ── LLMBackend protocol ───────────────────────────────────────────────────
 
+    @property
+    def bus(self):
+        """The AgentLoop's ConversationBus (shared with the daemon's server)."""
+        return self._loop.bus
+
+    def confirm(self, tool_call_id: str) -> None:
+        """Approve a mid-flight tool confirmation (from the IPC/server thread)."""
+        self._loop.confirm(tool_call_id)
+
+    def deny(self, tool_call_id: str) -> None:
+        """Reject a mid-flight tool confirmation (from the IPC/server thread)."""
+        self._loop.deny(tool_call_id)
+
     def query(self, text: str, system_prompt: str, obsidian_context: str = "") -> LLMResult:
         t0 = time.time()
         new_session = self.session_expired()

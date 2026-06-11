@@ -136,6 +136,20 @@ class OpenCodeServeBackend:
 
     # ── LLMBackend protocol ──────────────────────────────────────────────
 
+    @property
+    def bus(self) -> ConversationBus:
+        """The ConversationBus this backend publishes to (shared with the server)."""
+        return self._bus
+
+    def confirm(self, tool_call_id: str) -> None:
+        """Approve the pending mid-flight confirmation. opencode tracks a single
+        pending permission per session, so the id is accepted but not matched."""
+        self.reply_confirmation(True)
+
+    def deny(self, tool_call_id: str) -> None:
+        """Reject the pending mid-flight confirmation (id accepted, not matched)."""
+        self.reply_confirmation(False)
+
     def query(self, text: str, system_prompt: str, obsidian_context: str = "") -> LLMResult:
         t0 = time.time()
         self._ensure_running()

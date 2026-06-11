@@ -75,6 +75,11 @@ class AgentLoop:
 
     # ── public API ────────────────────────────────────────────────────────────
 
+    @property
+    def bus(self) -> ConversationBus:
+        """The event bus this loop publishes to (shared with the daemon's server)."""
+        return self._bus
+
     def reset(self) -> None:
         """Clear conversation history to start a new session."""
         self._messages = []

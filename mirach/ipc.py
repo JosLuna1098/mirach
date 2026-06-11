@@ -2,6 +2,7 @@
 
 Listens on a socket path (default /tmp/mirach.sock) and dispatches messages:
   - "toggle" → triggers the assistant FSM (record/process/interrupt cycle)
+  - "stop"   → hard stop: cancel the current run and clear the queue
   - "ping"   → replies "pong" for health checks
 
 Each connection is handled synchronously; the server runs in the main thread.
@@ -18,10 +19,15 @@ from mirach.logging_setup import log
 
 
 class SocketServer:
-    """Blocking Unix socket server that dispatches to a toggle callback."""
+    """Blocking Unix socket server that dispatches to toggle/stop callbacks."""
 
-    def __init__(self, on_toggle: Callable[[], None]) -> None:
+    def __init__(
+        self,
+        on_toggle: Callable[[], None],
+        on_stop: Callable[[], None] | None = None,
+    ) -> None:
         self._on_toggle = on_toggle
+        self._on_stop = on_stop
 
     def serve_forever(self) -> None:
         """Bind to the socket and accept connections indefinitely."""
@@ -38,6 +44,9 @@ class SocketServer:
                 data = conn.recv(64).decode().strip()
                 if data == "toggle":
                     self._on_toggle()
+                elif data == "stop":
+                    if self._on_stop:
+                        self._on_stop()
                 elif data == "ping":
                     conn.sendall(b"pong")
                 else:
