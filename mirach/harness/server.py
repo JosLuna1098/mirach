@@ -2,6 +2,7 @@
 
 Endpoints
 ---------
+GET  /                         — Widget HTML (loopback only; token injected).
 GET  /events?token=T&since=N   — SSE stream of ConversationBus events.
                                   `since` = event index for replay (default 0).
 POST /pair      {code, device?} — Exchange a displayed pairing code for a
@@ -33,6 +34,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import parse_qs, urlparse
 
+from mirach.harness._widget import WIDGET_HTML
 from mirach.logging_setup import log
 
 if TYPE_CHECKING:
@@ -133,6 +135,7 @@ class MirachServer:
         loopback = self._devices.ensure_loopback()
         host, port = self._httpd.server_address
         log.info("HTTP API server on %s:%d", host, port)
+        log.info("Widget: http://%s:%d/", host, port)
         log.info("Pairing code: %s", self._pair_code)
         log.info("Loopback token: %s", loopback)
         t = threading.Thread(target=self._httpd.serve_forever, daemon=True)
@@ -159,7 +162,9 @@ class MirachServer:
 
             def do_GET(self) -> None:
                 path = urlparse(self.path).path
-                if path == "/events":
+                if path == "/":
+                    server._handle_root(self)
+                elif path == "/events":
                     server._handle_events(self)
                 else:
                     server._send_json(self, 404, {"error": "not_found"})
@@ -311,6 +316,25 @@ class MirachServer:
             return
         self._assistant.reset_session()
         self._send_json(handler, 200, {"status": "ok"})
+
+    def _handle_root(self, handler: BaseHTTPRequestHandler) -> None:
+        """Serve the widget HTML, but only to loopback clients.
+
+        Non-loopback is rejected (403) so the loopback token is never leaked
+        if the server is later bound to a LAN/Tailscale interface.
+        """
+        ip = handler.client_address[0]
+        if ip not in ("127.0.0.1", "::1"):
+            self._send_json(handler, 403, {"error": "loopback_only"})
+            return
+        token = self._devices.ensure_loopback()
+        html = WIDGET_HTML.replace("__MIRACH_TOKEN__", token)
+        data = html.encode()
+        handler.send_response(200)
+        handler.send_header("Content-Type", "text/html; charset=utf-8")
+        handler.send_header("Content-Length", str(len(data)))
+        handler.end_headers()
+        handler.wfile.write(data)
 
 
 # ── SSE frame serializer ──────────────────────────────────────────────────────

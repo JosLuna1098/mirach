@@ -417,3 +417,54 @@ def test_pair_code_generator_format():
         assert len(code) == 6
         assert code.isalnum()
         assert code == code.upper()
+
+
+# ── GET / (widget) ────────────────────────────────────────────────────────
+
+
+def _get_text(url: str) -> tuple[int, str]:
+    req = urllib.request.Request(url)
+    try:
+        with urllib.request.urlopen(req) as resp:
+            return resp.status, resp.read().decode()
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode()
+
+
+def test_root_serves_html_to_loopback(base_url):
+    status, body = _get_text(f"{base_url}/")
+    assert status == 200
+    assert "<html" in body
+
+
+def test_root_injects_loopback_token(base_url, srv):
+    token = srv.get_loopback_token()
+    _, body = _get_text(f"{base_url}/")
+    assert token in body
+
+
+def test_root_non_loopback_returns_403(srv):
+    """Serving the widget to a non-loopback IP must be refused."""
+    import io
+
+    class _FakeHandler:
+        client_address = ("10.0.0.1", 9999)
+        path = "/"
+        headers: dict = {}
+
+        def __init__(self) -> None:
+            self.wfile = io.BytesIO()
+            self._status: int | None = None
+
+        def send_response(self, code: int) -> None:
+            self._status = code
+
+        def send_header(self, key: str, value: str) -> None:  # noqa: ARG002
+            pass
+
+        def end_headers(self) -> None:
+            pass
+
+    h = _FakeHandler()
+    srv._handle_root(h)
+    assert h._status == 403
