@@ -42,8 +42,10 @@ def _make_loop(
     registry = ToolRegistry()
     if tools:
         for name, retval in tools.items():
+
             def make_fn(rv):
                 return lambda _args: rv
+
             registry.register(ToolDef(name=name, description="", parameters={}), make_fn(retval))
     bus = ConversationBus()
     events: list = []

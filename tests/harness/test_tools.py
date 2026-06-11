@@ -112,7 +112,9 @@ class TestEditFile:
         assert "[error]" in result and "2" in result
 
     def test_missing_file_returns_error(self, tmp_path):
-        result = edit_file({"path": str(tmp_path / "nope.py"), "old_string": "a", "new_string": "b"})
+        result = edit_file(
+            {"path": str(tmp_path / "nope.py"), "old_string": "a", "new_string": "b"}
+        )
         assert "[error]" in result
 
 
@@ -163,7 +165,9 @@ class TestMemoryTools:
         assert "[error]" in result
 
     def test_recall_finds_matching_lines(self, tmp_path):
-        (tmp_path / "recordatorios.md").write_text("- [2026-01-01] Buy milk\n- [2026-01-02] Call dentist\n")
+        (tmp_path / "recordatorios.md").write_text(
+            "- [2026-01-01] Buy milk\n- [2026-01-02] Call dentist\n"
+        )
         recall = make_recall(tmp_path)
         result = recall({"query": "milk"})
         assert "Buy milk" in result
@@ -196,7 +200,9 @@ class TestStripHTML:
         assert "<" not in result
 
     def test_strips_script_and_style(self):
-        result = _strip_html("<style>body{color:red}</style><p>content</p><script>alert(1)</script>")
+        result = _strip_html(
+            "<style>body{color:red}</style><p>content</p><script>alert(1)</script>"
+        )
         assert "content" in result
         assert "color:red" not in result
         assert "alert" not in result
@@ -255,6 +261,7 @@ class TestWebSearch:
 
     def test_network_error_returns_error_string(self):
         import urllib.error
+
         with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("timeout")):
             result = web_search({"query": "test"})
         assert "[error]" in result
@@ -277,6 +284,7 @@ class TestWebFetch:
 
     def test_network_error_returns_error(self):
         import urllib.error
+
         with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("refused")):
             result = web_fetch({"url": "https://example.com"})
         assert "[error]" in result

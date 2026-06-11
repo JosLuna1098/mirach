@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import threading
 import time
-
-import pytest
 
 from mirach import config
 from mirach.harness.build import build_native_backend
@@ -16,7 +13,6 @@ from mirach.harness.providers.base import Response, ToolCall, ToolDef
 from mirach.harness.providers.mock import MockProvider
 from mirach.harness.tools.registry import ToolRegistry
 from mirach.llm_types import LLMBackend, LLMResult
-
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 

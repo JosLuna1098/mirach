@@ -184,18 +184,14 @@ class TestPreparePrompted:
 class TestSendWithRepair:
     def test_native_happy_path(self):
         tc = ToolCall(id="c1", name="bash", arguments={"command": "ls"})
-        provider = MockProvider(
-            [Response(content="", stop_reason="tool_use", tool_calls=[tc])]
-        )
+        provider = MockProvider([Response(content="", stop_reason="tool_use", tool_calls=[tc])])
         p = ToolProtocol(mode="native")
         resp = p.send_with_repair(provider, USER_MSG, TOOLS)
         assert resp.stop_reason == "tool_use"
         assert resp.tool_calls[0].name == "bash"
 
     def test_prompted_happy_path(self):
-        provider = MockProvider(
-            [_prompted_stop({"action": "final_answer", "answer": "ok"})]
-        )
+        provider = MockProvider([_prompted_stop({"action": "final_answer", "answer": "ok"})])
         p = ToolProtocol(mode="prompted")
         resp = p.send_with_repair(provider, USER_MSG, TOOLS)
         assert resp.content == "ok"

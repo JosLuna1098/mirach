@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import threading
@@ -23,7 +24,6 @@ from mirach.harness.providers.opencode import (
     _opencode_type_to_policy_tool,
     _parse_sse,
 )
-
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -68,7 +68,7 @@ class _FakeResp:
     def close(self) -> None:
         self.closed = True
 
-    def __enter__(self) -> "_FakeResp":
+    def __enter__(self) -> _FakeResp:
         return self
 
     def __exit__(self, *_: object) -> None:
@@ -164,7 +164,7 @@ def test_parse_sse_stops_on_interrupt():
 
 
 def test_parse_sse_ignores_malformed_json():
-    raw = b"data: not-json\n\ndata: {\"type\": \"ok\"}\n\n"
+    raw = b'data: not-json\n\ndata: {"type": "ok"}\n\n'
     resp = _FakeResp(raw)
     result = list(_parse_sse(resp, threading.Event()))
     assert result == [{"type": "ok"}]
@@ -181,14 +181,17 @@ def test_parse_sse_handles_crlf_line_endings():
 # ── _opencode_type_to_policy_tool ─────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("oc_type,expected", [
-    ("bash", "bash"),
-    ("edit", "edit_file"),
-    ("webfetch", "web_fetch"),
-    ("doom_loop", "bash"),
-    ("external_directory", "read_file"),
-    ("unknown_tool", "unknown_tool"),
-])
+@pytest.mark.parametrize(
+    "oc_type,expected",
+    [
+        ("bash", "bash"),
+        ("edit", "edit_file"),
+        ("webfetch", "web_fetch"),
+        ("doom_loop", "bash"),
+        ("external_directory", "read_file"),
+        ("unknown_tool", "unknown_tool"),
+    ],
+)
 def test_type_mapping(oc_type, expected):
     assert _opencode_type_to_policy_tool(oc_type) == expected
 
@@ -228,9 +231,15 @@ def test_query_non_text_fields_are_ignored():
     backend = _make_backend(bus=bus)
     sse = [
         # Tool input delta — should be ignored for text accumulation
-        {"type": "message.part.delta", "properties": {
-            "sessionID": "sess-1", "partID": "t1", "field": "input", "delta": '{"cmd":',
-        }},
+        {
+            "type": "message.part.delta",
+            "properties": {
+                "sessionID": "sess-1",
+                "partID": "t1",
+                "field": "input",
+                "delta": '{"cmd":',
+            },
+        },
         _text_delta("p1", "Done"),
         _session_idle(),
     ]
@@ -267,10 +276,13 @@ def test_query_session_error():
 
     backend = _make_backend(bus=bus)
     sse = [
-        {"type": "session.error", "properties": {
-            "sessionID": "sess-1",
-            "error": {"name": "UnknownError", "data": {"message": "boom"}},
-        }},
+        {
+            "type": "session.error",
+            "properties": {
+                "sessionID": "sess-1",
+                "error": {"name": "UnknownError", "data": {"message": "boom"}},
+            },
+        },
     ]
 
     with patch("urllib.request.urlopen", side_effect=_mock_urlopen(sse)):
@@ -296,9 +308,14 @@ def test_permission_allow():
     perm_event = {
         "type": "permission.updated",
         "properties": {
-            "id": "perm-1", "sessionID": "sess-1",
-            "type": "bash", "pattern": "ls", "title": "Run ls",
-            "callID": "c1", "metadata": {}, "time": {"created": 0},
+            "id": "perm-1",
+            "sessionID": "sess-1",
+            "type": "bash",
+            "pattern": "ls",
+            "title": "Run ls",
+            "callID": "c1",
+            "metadata": {},
+            "time": {"created": 0},
         },
     }
     sse = [
@@ -338,9 +355,14 @@ def test_permission_deny():
     perm_event = {
         "type": "permission.updated",
         "properties": {
-            "id": "perm-2", "sessionID": "sess-1",
-            "type": "bash", "pattern": "rm -rf /", "title": "Delete root",
-            "callID": "c2", "metadata": {}, "time": {"created": 0},
+            "id": "perm-2",
+            "sessionID": "sess-1",
+            "type": "bash",
+            "pattern": "rm -rf /",
+            "title": "Delete root",
+            "callID": "c2",
+            "metadata": {},
+            "time": {"created": 0},
         },
     }
     sse = [
@@ -383,9 +405,14 @@ def test_permission_confirm_user_allows():
     perm_event = {
         "type": "permission.updated",
         "properties": {
-            "id": "perm-3", "sessionID": "sess-1",
-            "type": "bash", "pattern": "git push", "title": "Push",
-            "callID": "c3", "metadata": {}, "time": {"created": 0},
+            "id": "perm-3",
+            "sessionID": "sess-1",
+            "type": "bash",
+            "pattern": "git push",
+            "title": "Push",
+            "callID": "c3",
+            "metadata": {},
+            "time": {"created": 0},
         },
     }
     sse = [
@@ -434,9 +461,14 @@ def test_permission_confirm_user_denies():
     perm_event = {
         "type": "permission.updated",
         "properties": {
-            "id": "perm-4", "sessionID": "sess-1",
-            "type": "bash", "pattern": "git push", "title": "Push",
-            "callID": "c4", "metadata": {}, "time": {"created": 0},
+            "id": "perm-4",
+            "sessionID": "sess-1",
+            "type": "bash",
+            "pattern": "git push",
+            "title": "Push",
+            "callID": "c4",
+            "metadata": {},
+            "time": {"created": 0},
         },
     }
     sse = [
@@ -483,9 +515,14 @@ def test_permission_confirm_timeout():
     perm_event = {
         "type": "permission.updated",
         "properties": {
-            "id": "perm-5", "sessionID": "sess-1",
-            "type": "bash", "pattern": "git push", "title": "Push",
-            "callID": "c5", "metadata": {}, "time": {"created": 0},
+            "id": "perm-5",
+            "sessionID": "sess-1",
+            "type": "bash",
+            "pattern": "git push",
+            "title": "Push",
+            "callID": "c5",
+            "metadata": {},
+            "time": {"created": 0},
         },
     }
     sse = [
@@ -504,9 +541,11 @@ def test_permission_confirm_timeout():
             posted.append((url, json.loads(req.data)))
         return _FakeResp(b"{}")
 
-    with patch.object(oc_module, "_CONFIRM_TIMEOUT", 0.05):
-        with patch("urllib.request.urlopen", side_effect=_urlopen):
-            backend.query("git push", "")
+    with (
+        patch.object(oc_module, "_CONFIRM_TIMEOUT", 0.05),
+        patch("urllib.request.urlopen", side_effect=_urlopen),
+    ):
+        backend.query("git push", "")
 
     perm_replies = [(u, b) for u, b in posted if "permissions" in u]
     assert perm_replies[0][1] == {"response": "reject"}
@@ -654,10 +693,8 @@ def test_query_injects_system_prompt_on_new_session():
         if "/event" in url:
             return _FakeResp(_make_sse_bytes(*sse))
         if hasattr(req, "data") and req.data:
-            try:
+            with contextlib.suppress(Exception):
                 bodies.append(json.loads(req.data))
-            except Exception:
-                pass
         if "/session" in url and not any(
             x in url for x in ["prompt_async", "permissions", "abort"]
         ):
@@ -691,10 +728,8 @@ def test_query_no_system_prompt_on_existing_session():
         if "/event" in url:
             return _FakeResp(_make_sse_bytes(*sse))
         if hasattr(req, "data") and req.data:
-            try:
+            with contextlib.suppress(Exception):
                 bodies.append(json.loads(req.data))
-            except Exception:
-                pass
         return _FakeResp(b"{}")
 
     with patch("urllib.request.urlopen", side_effect=_urlopen):

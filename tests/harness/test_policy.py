@@ -141,7 +141,9 @@ class TestNetworkPolicy:
         assert e.check_web_fetch("https://example.com/page") == Decision.ALLOW
 
     def test_web_fetch_denied_domain_in_deny_list(self):
-        net = NetworkPolicy(web_fetch=WebFetchPolicy(allow_domains=["*"], deny_domains=["evil.com"]))
+        net = NetworkPolicy(
+            web_fetch=WebFetchPolicy(allow_domains=["*"], deny_domains=["evil.com"])
+        )
         e = PolicyEngine(Policy(defaults=PolicyDefaults(network=net)))
         assert e.check_web_fetch("https://evil.com/payload") == Decision.DENY
 
@@ -151,16 +153,12 @@ class TestNetworkPolicy:
         assert e.check_web_fetch("https://example.com") == Decision.DENY
 
     def test_web_fetch_allowed_specific_domain(self):
-        net = NetworkPolicy(
-            web_fetch=WebFetchPolicy(allow_domains=["github.com"], deny_domains=[])
-        )
+        net = NetworkPolicy(web_fetch=WebFetchPolicy(allow_domains=["github.com"], deny_domains=[]))
         e = PolicyEngine(Policy(defaults=PolicyDefaults(network=net)))
         assert e.check_web_fetch("https://github.com/some/repo") == Decision.ALLOW
 
     def test_web_fetch_denied_unlisted_domain(self):
-        net = NetworkPolicy(
-            web_fetch=WebFetchPolicy(allow_domains=["github.com"], deny_domains=[])
-        )
+        net = NetworkPolicy(web_fetch=WebFetchPolicy(allow_domains=["github.com"], deny_domains=[]))
         e = PolicyEngine(Policy(defaults=PolicyDefaults(network=net)))
         assert e.check_web_fetch("https://otherdomain.com") == Decision.DENY
 

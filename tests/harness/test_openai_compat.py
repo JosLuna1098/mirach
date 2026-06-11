@@ -32,7 +32,9 @@ def _choices(content: str = "", tool_calls: list | None = None) -> dict[str, Any
     msg: dict[str, Any] = {"role": "assistant", "content": content}
     if tool_calls:
         msg["tool_calls"] = tool_calls
-    return {"choices": [{"message": msg, "finish_reason": "stop" if not tool_calls else "tool_calls"}]}
+    return {
+        "choices": [{"message": msg, "finish_reason": "stop" if not tool_calls else "tool_calls"}]
+    }
 
 
 def _make_provider(**kwargs: Any) -> OpenAICompatProvider:
@@ -62,7 +64,11 @@ class TestBuildPayload:
 
     def test_tools_present_when_given(self):
         p = _make_provider()
-        tools = [ToolDef(name="foo", description="does foo", parameters={"type": "object", "properties": {}})]
+        tools = [
+            ToolDef(
+                name="foo", description="does foo", parameters={"type": "object", "properties": {}}
+            )
+        ]
         payload = p._build_payload([], tools, {})
         assert len(payload["tools"]) == 1
         assert payload["tool_choice"] == "auto"
@@ -164,7 +170,10 @@ class TestSend:
             url="http://x", code=400, msg="Bad Request", hdrs=None, fp=BytesIO(b"bad input")
         )
 
-        with patch("urllib.request.urlopen", side_effect=err), pytest.raises(RuntimeError, match="HTTP 400"):
+        with (
+            patch("urllib.request.urlopen", side_effect=err),
+            pytest.raises(RuntimeError, match="HTTP 400"),
+        ):
             p.send([Message(role="user", content="hi")], [])
 
     def test_ctx_forwarded_in_payload(self):
