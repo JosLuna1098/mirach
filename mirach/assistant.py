@@ -496,9 +496,10 @@ class Assistant:
         _install_shutdown_hooks(self)
         self.load()
         notify.notify(i18n.t("daemon_ready_title"), i18n.t("daemon_ready_body"))
-        # Phase 3: the local HTTP/SSE server starts here in a parallel daemon
-        # thread, sharing this Assistant (self.bus, submit_turn, stop, confirm,
-        # deny). Added in the server-module session.
+        if config.SERVER_ENABLED:
+            from mirach.harness.server import MirachServer
+
+            MirachServer(self, config.SERVER_HOST, config.SERVER_PORT).start()
         SocketServer(on_toggle=self.toggle, on_stop=self.stop).serve_forever()
 
     def shutdown(self) -> None:
