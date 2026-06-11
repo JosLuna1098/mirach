@@ -78,8 +78,9 @@ class OpenCodeServeBackend:
         self._confirm_event = threading.Event()
         self._confirm_result: bool = True  # True=allow, False=deny
 
-        # Cumulative tokens seen in the SSE stream for this session.
-        # Reset on reset_session() and after a successful compact.
+        # Current context size in tokens. opencode serve does not deliver token
+        # counts over the SSE stream, so this is refreshed from the REST API
+        # (_fetch_session_tokens) after each turn. Zeroed on reset/compact.
         self._session_tokens: int = 0
 
     # ── subprocess lifecycle ─────────────────────────────────────────────
@@ -191,12 +192,6 @@ class OpenCodeServeBackend:
                             if delta:
                                 self._bus.publish(TextDeltaEvent(delta=delta))
 
-                    elif etype == "message.updated":
-                        # Accumulate per-message token counts for context budget tracking.
-                        tokens = props.get("info", {}).get("tokens", {})
-                        if isinstance(tokens, dict):
-                            self._session_tokens += tokens.get("input", 0) + tokens.get("output", 0)
-
                     elif etype == "permission.updated":
                         self._handle_permission(props)
 
@@ -241,12 +236,14 @@ class OpenCodeServeBackend:
         self._bus.publish(DoneEvent(content=response))
         log.info("opencode serve responded (%.2fs): %s", elapsed, response[:120])
 
-        # Compact context if the session token budget is exceeded.
-        if (
-            config.CONTEXT_STRATEGY in _STRATEGIES_WITH_COMPACT
-            and self._session_tokens > config.CONTEXT_MAX_TOKENS
-        ):
-            self._compact()
+        # Compact context if the session token budget is exceeded. opencode serve
+        # does not emit token counts on the SSE stream (no message.updated events
+        # in v1.14.x), so read the authoritative count from the REST API after the
+        # turn rather than accumulating from events.
+        if config.CONTEXT_STRATEGY in _STRATEGIES_WITH_COMPACT:
+            self._session_tokens = self._fetch_session_tokens()
+            if self._session_tokens > config.CONTEXT_MAX_TOKENS:
+                self._compact()
 
         return LLMResult(response, new_session, False, elapsed)
 
@@ -301,6 +298,33 @@ class OpenCodeServeBackend:
                 log.warning("opencode compact returned unexpected result: %r", result)
         except Exception as exc:
             log.warning("opencode compact failed: %s", exc)
+
+    def _fetch_session_tokens(self) -> int:
+        """Current context size in tokens = the last assistant message's
+        input+output, read from GET /session/{id}/message.
+
+        opencode serve (v1.14.x) does not deliver token counts over the SSE
+        stream, so the budget tracker reads them from the REST API after each
+        turn. The last assistant message's `input` already reflects the full
+        prompt (system + history), so `input + output` approximates the context
+        footprint. Returns the previous value on failure so a transient error
+        can't silently wipe the budget and trigger a needless compact.
+        """
+        if not self._session_id or not self._base_url:
+            return 0
+        try:
+            messages = self._http_get(f"/session/{self._session_id}/message")
+        except Exception as exc:
+            log.warning("could not fetch session tokens: %s", exc)
+            return self._session_tokens
+        tokens = 0
+        for msg in messages if isinstance(messages, list) else []:
+            info = msg.get("info", msg) if isinstance(msg, dict) else {}
+            if info.get("role") == "assistant":
+                tk = info.get("tokens") or {}
+                if isinstance(tk, dict):
+                    tokens = tk.get("input", 0) + tk.get("output", 0)
+        return tokens
 
     def reply_confirmation(self, allow: bool) -> None:
         """Signal a pending CONFIRM permission request from external code."""
@@ -385,6 +409,14 @@ class OpenCodeServeBackend:
         with urllib.request.urlopen(req, timeout=30.0) as resp:
             raw = resp.read()
             return json.loads(raw) if raw else {}
+
+    def _http_get(self, path: str):
+        params = urlencode({"directory": self._cwd})
+        url = f"{self._base_url}{path}?{params}"
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=15.0) as resp:
+            raw = resp.read()
+            return json.loads(raw) if raw else []
 
     def _http_delete(self, path: str) -> None:
         params = urlencode({"directory": self._cwd})

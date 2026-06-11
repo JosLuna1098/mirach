@@ -340,16 +340,6 @@ def _text_delta(part_id: str, delta: str, session_id: str = "sess-1") -> dict:
     }
 
 
-def _message_updated(input_tokens: int, output_tokens: int, session_id: str = "sess-1") -> dict:
-    return {
-        "type": "message.updated",
-        "properties": {
-            "sessionID": session_id,
-            "info": {"tokens": {"input": input_tokens, "output": output_tokens, "reasoning": 0}},
-        },
-    }
-
-
 def _session_idle(session_id: str = "sess-1") -> dict:
     return {"type": "session.idle", "properties": {"sessionID": session_id}}
 
@@ -397,17 +387,17 @@ def _make_backend(session_tokens: int = 0):
 
 
 def test_opencode_compact_fires_when_over_budget():
-    """_compact() is called when session_tokens exceeds CONTEXT_MAX_TOKENS."""
-    backend = _make_backend(session_tokens=99_999)
+    """_compact() is called when the fetched context size exceeds CONTEXT_MAX_TOKENS."""
+    backend = _make_backend()
 
     sse_body = _make_sse_bytes(
         _text_delta("p1", "hello"),
-        _message_updated(100, 50),
         _session_idle(),
     )
     with (
         patch("mirach.config.CONTEXT_STRATEGY", "summarize"),
         patch("mirach.config.CONTEXT_MAX_TOKENS", 1),
+        patch.object(backend, "_fetch_session_tokens", return_value=99_999),
         patch.object(backend, "_compact") as mock_compact,
         patch.object(backend, "_ensure_running"),
         patch("urllib.request.urlopen", return_value=_FakeResp(sse_body)),
@@ -419,17 +409,17 @@ def test_opencode_compact_fires_when_over_budget():
 
 
 def test_opencode_compact_not_fired_when_under_budget():
-    """_compact() is NOT called when token count is below the threshold."""
-    backend = _make_backend(session_tokens=0)
+    """_compact() is NOT called when the fetched context size is below threshold."""
+    backend = _make_backend()
 
     sse_body = _make_sse_bytes(
         _text_delta("p1", "reply"),
-        _message_updated(10, 5),  # well under 100_000
         _session_idle(),
     )
     with (
         patch("mirach.config.CONTEXT_STRATEGY", "summarize"),
         patch("mirach.config.CONTEXT_MAX_TOKENS", 100_000),
+        patch.object(backend, "_fetch_session_tokens", return_value=150),
         patch.object(backend, "_compact") as mock_compact,
         patch.object(backend, "_ensure_running"),
         patch("urllib.request.urlopen", return_value=_FakeResp(sse_body)),
@@ -483,25 +473,43 @@ def test_opencode_compact_does_not_reset_on_failure():
     assert backend._session_tokens == 50_000
 
 
-def test_opencode_token_counter_accumulates_from_sse():
-    """Tokens from message.updated events accumulate in _session_tokens."""
+def test_opencode_fetch_session_tokens_reads_last_assistant():
+    """_fetch_session_tokens returns the last assistant message's input+output."""
+    backend = _make_backend()
+    messages = [
+        {"info": {"role": "user", "tokens": None}},
+        {"info": {"role": "assistant", "tokens": {"input": 4000, "output": 200, "reasoning": 0}}},
+    ]
+    with patch.object(backend, "_http_get", return_value=messages):
+        assert backend._fetch_session_tokens() == 4200
+
+
+def test_opencode_fetch_session_tokens_survives_failure():
+    """A transient GET failure returns the previous value, not 0."""
+    backend = _make_backend(session_tokens=777)
+    with patch.object(backend, "_http_get", side_effect=OSError("boom")):
+        assert backend._fetch_session_tokens() == 777
+
+
+def test_opencode_query_refreshes_tokens_from_rest():
+    """query() sets _session_tokens from the REST fetch when strategy compacts."""
     backend = _make_backend(session_tokens=0)
 
     sse_body = _make_sse_bytes(
         _text_delta("p1", "answer"),
-        _message_updated(100, 50),
         _session_idle(),
     )
     with (
-        patch("mirach.config.CONTEXT_STRATEGY", "none"),
+        patch("mirach.config.CONTEXT_STRATEGY", "summarize"),
         patch("mirach.config.CONTEXT_MAX_TOKENS", 100_000),
+        patch.object(backend, "_fetch_session_tokens", return_value=4200),
         patch.object(backend, "_ensure_running"),
         patch("urllib.request.urlopen", return_value=_FakeResp(sse_body)),
         patch.object(backend, "_http_post", return_value={}),
     ):
         backend.query("q", system_prompt="")
 
-    assert backend._session_tokens == 150  # 100 input + 50 output
+    assert backend._session_tokens == 4200
 
 
 def test_opencode_reset_session_clears_token_counter():
