@@ -26,6 +26,8 @@ from mirach.harness.policy.engine import Decision, PolicyEngine
 from mirach.llm_types import LLMResult, _strip_markdown
 from mirach.logging_setup import log
 
+_STRATEGIES_WITH_COMPACT = {"summarize"}
+
 if TYPE_CHECKING:
     pass
 
@@ -75,6 +77,10 @@ class OpenCodeServeBackend:
 
         self._confirm_event = threading.Event()
         self._confirm_result: bool = True  # True=allow, False=deny
+
+        # Cumulative tokens seen in the SSE stream for this session.
+        # Reset on reset_session() and after a successful compact.
+        self._session_tokens: int = 0
 
     # ── subprocess lifecycle ─────────────────────────────────────────────
 
@@ -185,6 +191,12 @@ class OpenCodeServeBackend:
                             if delta:
                                 self._bus.publish(TextDeltaEvent(delta=delta))
 
+                    elif etype == "message.updated":
+                        # Accumulate per-message token counts for context budget tracking.
+                        tokens = props.get("info", {}).get("tokens", {})
+                        if isinstance(tokens, dict):
+                            self._session_tokens += tokens.get("input", 0) + tokens.get("output", 0)
+
                     elif etype == "permission.updated":
                         self._handle_permission(props)
 
@@ -228,6 +240,14 @@ class OpenCodeServeBackend:
         self._last_interaction = time.time()
         self._bus.publish(DoneEvent(content=response))
         log.info("opencode serve responded (%.2fs): %s", elapsed, response[:120])
+
+        # Compact context if the session token budget is exceeded.
+        if (
+            config.CONTEXT_STRATEGY in _STRATEGIES_WITH_COMPACT
+            and self._session_tokens > config.CONTEXT_MAX_TOKENS
+        ):
+            self._compact()
+
         return LLMResult(response, new_session, False, elapsed)
 
     def interrupt(self) -> None:
@@ -256,7 +276,31 @@ class OpenCodeServeBackend:
                 log.warning("Could not delete opencode session: %s", exc)
         self._session_id = None
         self._last_interaction = 0.0
+        self._session_tokens = 0
         log.info("opencode session reset")
+
+    def _compact(self) -> None:
+        """Trigger server-side context compaction via POST /session/{id}/summarize.
+
+        Endpoint verified from @opencode-ai/sdk v1 (sdk.gen.js):
+          POST /session/{id}/summarize
+          Body (optional): {providerID, modelID}
+          Returns: 200 boolean (true = success)
+        """
+        if not self._session_id or not self._base_url:
+            return
+        body: dict = {}
+        if self._provider_id and self._model_id:
+            body = {"providerID": self._provider_id, "modelID": self._model_id}
+        try:
+            result = self._http_post(f"/session/{self._session_id}/summarize", body)
+            if result is True or result == {} or result:
+                self._session_tokens = 0
+                log.info("opencode context compacted (session %s)", self._session_id)
+            else:
+                log.warning("opencode compact returned unexpected result: %r", result)
+        except Exception as exc:
+            log.warning("opencode compact failed: %s", exc)
 
     def reply_confirmation(self, allow: bool) -> None:
         """Signal a pending CONFIRM permission request from external code."""

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from mirach import config
+from mirach.harness.context import ContextManager
 from mirach.harness.events import ConversationBus
 from mirach.harness.loop import AgentLoop
 from mirach.harness.native_backend import NativeBackend
@@ -56,6 +57,7 @@ def build_native_backend(speak_filler: Callable[[str], None] | None = None) -> N
 
     policy = PolicyEngine.load(config.NATIVE_POLICY_PATH)
     protocol = ToolProtocol(mode=config.NATIVE_TOOL_PROTOCOL)
+    context_manager = ContextManager(config.CONTEXT_STRATEGY, config.CONTEXT_MAX_TOKENS)
 
     bus = ConversationBus()
     loop = AgentLoop(
@@ -64,6 +66,7 @@ def build_native_backend(speak_filler: Callable[[str], None] | None = None) -> N
         bus=bus,
         policy=policy,
         protocol=protocol,
+        context_manager=context_manager,
     )
 
     return NativeBackend(loop=loop, speak_filler=speak_filler)

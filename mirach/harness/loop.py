@@ -18,6 +18,7 @@ from mirach.harness.providers.base import Message, Provider, Response, ToolCall
 from mirach.harness.tools.registry import ToolRegistry
 
 if TYPE_CHECKING:
+    from mirach.harness.context import ContextManager
     from mirach.harness.policy.engine import PolicyEngine
     from mirach.harness.tool_protocol import ToolProtocol
 
@@ -55,12 +56,14 @@ class AgentLoop:
         *,
         policy: PolicyEngine | None = None,
         protocol: ToolProtocol | None = None,
+        context_manager: ContextManager | None = None,
     ) -> None:
         self._provider = provider
         self._registry = registry
         self._bus = bus
         self._policy = policy
         self._protocol = protocol
+        self._context_manager = context_manager
 
         # Conversation history — persists across run() calls; never includes system.
         self._messages: list[Message] = []
@@ -114,6 +117,10 @@ class AgentLoop:
             if response.stop_reason == "stop" or not response.tool_calls:
                 messages.append(Message(role="assistant", content=response.content))
                 self._messages = messages[history_start:]
+                if self._context_manager is not None:
+                    self._messages = self._context_manager.compact_if_needed(
+                        self._messages, self._provider
+                    )
                 self._bus.publish(DoneEvent(content=response.content))
                 return response.content
 

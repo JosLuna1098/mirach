@@ -109,3 +109,10 @@ BEEP_START_WAV = os.path.join(_TMP, "mirach_beep_start.wav")
 BEEP_PROCESS_WAV = os.path.join(_TMP, "mirach_beep_process.wav")
 BEEP_SHUTDOWN_WAV = os.path.join(_TMP, "mirach_beep_shutdown.wav")
 FILLER_DELAY_SEC = _env_float("MIRACH_FILLER_DELAY", 6.0)
+
+# ── Context management (both backends) ────────────────────────────────
+# Strategy: none (off) | sliding (drop oldest rounds) | summarize (LLM-summary prefix)
+# Default "none" keeps current behaviour unchanged until explicitly opted in.
+CONTEXT_STRATEGY = _env("MIRACH_CONTEXT_STRATEGY", "none")
+# Conservative token budget — 32k lets long sessions run before triggering compaction.
+CONTEXT_MAX_TOKENS = _env_int("MIRACH_CONTEXT_MAX_TOKENS", 32768)
