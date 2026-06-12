@@ -40,6 +40,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "process_failed": "Something went wrong processing your request. Try again.",
         "conversation_shown": "Conversation opened in your browser.",
         "no_conversation": "No conversation saved yet.",
+        # Voice-confirm (spoken on a voice turn before a dangerous tool runs)
+        "confirm_question": "Confirm {action}? Press {hotkey} and answer yes or no.",
     },
     "es": {
         # Desktop notifications
@@ -67,6 +69,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "process_failed": "Algo falló al procesar tu consulta. Intenta de nuevo.",
         "conversation_shown": "Conversación abierta en tu navegador.",
         "no_conversation": "No hay conversaciones guardadas aún.",
+        # Voice-confirm (spoken on a voice turn before a dangerous tool runs)
+        "confirm_question": "¿Confirmas {action}? Pulsa {hotkey} y responde sí o no.",
     },
 }
 

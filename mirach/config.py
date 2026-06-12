@@ -72,6 +72,11 @@ VOICE_SPEED = _env_float("MIRACH_VOICE_SPEED", 1.2)
 
 SESSION_IDLE_TIMEOUT = _env_float("MIRACH_SESSION_IDLE_TIMEOUT", 3600.0)  # 1 hour
 
+# Voice-confirm: on a voice turn, Mirach speaks the confirmation question and waits
+# for the user to press the hotkey and answer yes/no. If no answer is started within
+# this many seconds, the pending tool call is auto-denied (fail-safe).
+VOICE_CONFIRM_TIMEOUT = _env_float("MIRACH_VOICE_CONFIRM_TIMEOUT", 20.0)
+
 # ── Backend selection ─────────────────────────────────────────────────
 # MIRACH_BACKEND=opencode_serve  (default) — delegate to opencode serve (HTTP+SSE)
 # MIRACH_BACKEND=native                    — use the custom agentic harness (local LLMs)

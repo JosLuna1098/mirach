@@ -63,6 +63,47 @@ class UserScript:
     description: str = ""
 
 
+@dataclass
+class _PendingConfirm:
+    """A tool confirmation a voice turn is answering by voice (spoken Q + hotkey A)."""
+
+    tool_call_id: str
+    timer: threading.Timer
+    recording: bool = False
+
+
+# Words that count as a "yes" when interpreting a spoken confirmation answer (ES + EN).
+# Anything without one of these is treated as "no" — unclear answers fail safe to deny.
+_AFFIRMATIVE_WORDS = frozenset(
+    {
+        "sí",
+        "si",
+        "claro",
+        "dale",
+        "ok",
+        "okay",
+        "vale",
+        "confirmo",
+        "confirmado",
+        "adelante",
+        "hazlo",
+        "correcto",
+        "afirmativo",
+        "bueno",
+        "perfecto",
+        "yes",
+        "yeah",
+        "yep",
+        "yup",
+        "sure",
+        "confirm",
+        "confirmed",
+        "go",
+        "do",
+    }
+)
+
+
 # Built-in trigger phrases that bypass the LLM entirely.
 # Keys are lowercase trigger phrases, values are (i18n response key, handler name).
 BUILTIN_TRIGGERS: dict[str, tuple[str, str]] = {
@@ -107,6 +148,10 @@ class Assistant:
         # Turns are serialized by the FSM, so a plain attribute is race-free.
         self._active_channel = "voice"
 
+        # Set while a voice turn is answering a tool confirmation by voice (spoken
+        # question → hotkey → spoken yes/no). Guarded by _state_lock. None otherwise.
+        self._voice_confirm: _PendingConfirm | None = None
+
         # Shared FIFO queue of pending text turns (from the widget / mobile app).
         # Guarded by _state_lock; drained when the FSM returns to IDLE. Voice turns
         # are not queued (they are interactive and foreground). See submit_turn().
@@ -134,6 +179,9 @@ class Assistant:
         self._system_prompt = ""
         self._obsidian = ObsidianCache(config.OBSIDIAN_VAULT)
         self._user_scripts: list[UserScript] = []
+
+        # Watch the bus so a voice turn can answer tool confirmations by voice.
+        self.bus.subscribe(self._on_bus_event)
 
     # ── State helpers ──────────────────────────────────────────────────
 
@@ -355,6 +403,7 @@ class Assistant:
             with contextlib.suppress(Exception):
                 self._respond(i18n.t("error_occurred"), channel)
         finally:
+            self._clear_voice_confirm()
             self._set_state(State.IDLE)
             self._maybe_start_next()
 
@@ -368,7 +417,14 @@ class Assistant:
         slot to record — a pending text queue is preserved and drains afterwards.
         """
         with self._state_lock:
+            pending = self._voice_confirm
             current = self._state
+
+        # A voice confirmation is waiting: the hotkey answers it instead of
+        # interrupting the turn (1st press records the yes/no, 2nd press submits it).
+        if pending is not None:
+            self._toggle_voice_confirm(pending)
+            return
 
         if current is State.PROCESSING:
             log.info("User interrupt requested (voice)")
@@ -448,11 +504,13 @@ class Assistant:
         log.info("Stopped: current run cancelled and queue cleared")
 
     def confirm(self, tool_call_id: str) -> None:
-        """Approve a mid-flight tool confirmation (relayed from the server)."""
+        """Approve a mid-flight tool confirmation (voice answer or relayed from the server)."""
+        self._clear_voice_confirm(tool_call_id)
         self._llm.confirm(tool_call_id)
 
     def deny(self, tool_call_id: str) -> None:
-        """Reject a mid-flight tool confirmation (relayed from the server)."""
+        """Reject a mid-flight tool confirmation (voice answer or relayed from the server)."""
+        self._clear_voice_confirm(tool_call_id)
         self._llm.deny(tool_call_id)
 
     def reset_session(self) -> None:
@@ -460,12 +518,14 @@ class Assistant:
         self._llm.reset_session()
 
     def _on_filler(self, phrase: str) -> None:
-        """Filler callback handed to the backend; silent on text-channel turns.
+        """Filler callback handed to the backend; silent on text turns and confirms.
 
         Fillers are PC audio, so they only play for a voice turn. Text turns
-        (widget / mobile) must not make the PC speak while the user waits.
+        (widget / mobile) must not make the PC speak while the user waits, and a
+        pending voice confirmation must stay quiet so the spoken question and the
+        user's answer aren't talked over.
         """
-        if self._active_channel == "voice":
+        if self._active_channel == "voice" and self._voice_confirm is None:
             self._tts.speak_filler(phrase)
 
     def _respond(self, text: str, channel: str, *, on_bus: bool = False) -> None:
@@ -493,6 +553,105 @@ class Assistant:
         from mirach.harness.events import QueueClearedEvent
 
         self._publish_event(QueueClearedEvent())
+
+    # ── Voice confirmation (a voice turn answers a tool confirm by voice) ──
+
+    def _on_bus_event(self, event) -> None:
+        """Bus subscriber: start a voice-confirm flow when a voice turn needs approval.
+
+        Runs synchronously on the publishing thread (the same publish fans out to
+        the SSE server feeding the widget), so it must not block — it only hands
+        off to a worker thread. The widget confirm block still appears for every
+        channel; the first device to answer wins. Text turns rely on it alone.
+        """
+        if getattr(event, "type", "") != "awaiting_confirmation":
+            return
+        if self._active_channel != "voice":
+            return
+        threading.Thread(target=self._begin_voice_confirm, args=(event,), daemon=True).start()
+
+    def _begin_voice_confirm(self, event) -> None:
+        """Speak the confirmation question and arm the auto-deny timeout."""
+        tool_call_id = event.tool_call_id
+        timer = threading.Timer(
+            config.VOICE_CONFIRM_TIMEOUT, self._voice_confirm_timeout, args=(tool_call_id,)
+        )
+        timer.daemon = True
+        with self._state_lock:
+            self._voice_confirm = _PendingConfirm(tool_call_id=tool_call_id, timer=timer)
+        timer.start()
+        question = i18n.t("confirm_question").replace("{action}", self._describe_tool(event))
+        self._tts.speak(question)
+
+    def _toggle_voice_confirm(self, pending: _PendingConfirm) -> None:
+        """Hotkey press while a voice confirmation is pending.
+
+        First press records the spoken yes/no; second press stops, transcribes,
+        and submits the answer off-thread so the IPC handler returns promptly.
+        """
+        if not pending.recording:
+            with self._state_lock:
+                if self._voice_confirm is not pending:
+                    return  # answered or timed out between toggle's read and here
+                pending.recording = True
+            pending.timer.cancel()
+            self._begin_recording()
+            return
+        threading.Thread(target=self._finish_voice_confirm, args=(pending,), daemon=True).start()
+
+    def _finish_voice_confirm(self, pending: _PendingConfirm) -> None:
+        """Stop the answer recording, transcribe it, and confirm/deny accordingly."""
+        audio = self._audio.stop()
+        pending.recording = False
+        text = self._stt.transcribe(audio) if audio is not None else ""
+        log.info("Voice confirmation answer: %r", text)
+        if self._is_affirmative(text):
+            self.confirm(pending.tool_call_id)
+        else:
+            self.deny(pending.tool_call_id)
+
+    def _voice_confirm_timeout(self, tool_call_id: str) -> None:
+        """Auto-deny a voice confirmation the user never started answering."""
+        with self._state_lock:
+            pending = self._voice_confirm
+            if pending is None or pending.tool_call_id != tool_call_id or pending.recording:
+                return  # already answered, superseded, or an answer is in progress
+        log.info("Voice confirmation timed out → deny")
+        self.deny(tool_call_id)
+
+    def _clear_voice_confirm(self, tool_call_id: str | None = None) -> None:
+        """Drop the pending voice confirmation (answered, superseded, or turn ended).
+
+        With a tool_call_id, only clears a matching pending confirm so a stale id
+        can't cancel a newer one. Cancels the timeout and stops any in-flight
+        answer recording.
+        """
+        with self._state_lock:
+            pending = self._voice_confirm
+            if pending is None:
+                return
+            if tool_call_id is not None and pending.tool_call_id != tool_call_id:
+                return
+            self._voice_confirm = None
+        pending.timer.cancel()
+        if pending.recording:
+            with contextlib.suppress(Exception):
+                self._audio.stop()
+
+    @staticmethod
+    def _describe_tool(event) -> str:
+        """Build a short spoken description of a tool call for the confirm question."""
+        args = getattr(event, "arguments", None) or {}
+        for key in ("command", "cmd", "path", "file", "query", "url"):
+            val = args.get(key)
+            if isinstance(val, str) and val.strip():
+                return f"{event.name}: {val.strip()}"
+        return event.name
+
+    @staticmethod
+    def _is_affirmative(text: str) -> bool:
+        """True if a transcribed answer contains a yes-word. Unclear → False (deny)."""
+        return any(w in _AFFIRMATIVE_WORDS for w in re.findall(r"\w+", text.lower()))
 
     # ── Slot arbitration (queue drain vs. voice vs. interrupt) ──────────
 
