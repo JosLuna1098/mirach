@@ -101,7 +101,7 @@ Place executable scripts in `user_scripts/` with metadata comments:
 # response: Focus mode activated.
 # description: Enables focus mode
 
-omarchy-toggle-nightlight
+hyprsunset -t 3500 &
 ```
 
 The daemon parses these at startup. When you say a trigger phrase, the script

@@ -1,6 +1,6 @@
 # User Scripts Format Reference
 
-User scripts are shell or Python files placed in `~/mirach/user_scripts/` that the daemon parses at startup for trigger phrases.
+User scripts are shell or Python files placed in `<mirach_dir>/user_scripts/` that the daemon parses at startup for trigger phrases.
 
 ## File requirements
 
@@ -61,7 +61,7 @@ User scripts are shell or Python files placed in `~/mirach/user_scripts/` that t
 # triggers: toggle nightlight, night light on, night light off
 # response: Nightlight toggled.
 
-omarchy-toggle-nightlight
+pkill hyprsunset || (hyprsunset -t 3500 &)
 ```
 
 ### With notification

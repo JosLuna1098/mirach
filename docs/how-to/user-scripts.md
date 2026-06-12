@@ -4,7 +4,7 @@ User scripts let you bypass the LLM and run shell commands directly when you say
 
 ## Create a script
 
-Place a `.sh` or `.py` file in `~/mirach/user_scripts/` with metadata comments at the top:
+Place a `.sh` or `.py` file in `<mirach_dir>/user_scripts/` with metadata comments at the top:
 
 ```bash
 #!/bin/bash
@@ -47,9 +47,9 @@ systemctl --user restart mirach
 #!/bin/bash
 # triggers: nightlight, luz nocturna, night light
 # response: Nightlight toggled.
-# description: Toggle Omarchy nightlight
+# description: Toggle hyprsunset nightlight
 
-omarchy-toggle-nightlight
+pkill hyprsunset || (hyprsunset -t 3500 &)
 ```
 
 ### System info
