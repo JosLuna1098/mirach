@@ -176,3 +176,16 @@ def test_filler_suppressed_while_confirm_pending(asst):
     asst._on_filler("un momento")
     asst._tts.speak_filler.assert_not_called()
     asst._clear_voice_confirm()
+
+
+def test_voice_confirm_timeout_under_opencode_permission_timeout():
+    """The voice auto-deny must fire well before opencode gives up on the permission.
+
+    If opencode's permission timeout were the shorter one, it would reject the tool
+    before the user's spoken answer landed, silently ignoring their "sí". This guard
+    keeps the voice-confirm window (plus room to actually answer) inside it.
+    """
+    from mirach import config
+    from mirach.harness.providers.opencode import _CONFIRM_TIMEOUT
+
+    assert config.VOICE_CONFIRM_TIMEOUT < _CONFIRM_TIMEOUT
