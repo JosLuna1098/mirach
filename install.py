@@ -786,7 +786,7 @@ ALL_CAPABILITIES = [
     ("mirach-user-context", "User context (OS, hardware, country)", True),
     ("mirach-apps", "Opening applications", True),
     ("mirach-web-search", "Web search (DuckDuckGo)", True),
-    ("mirach-omarchy", "Omarchy/Hyprland management", True),
+    ("mirach-system", "System management (Hyprland/Arch/systemd)", True),
     ("mirach-obsidian", "Obsidian notes (local memory)", True),
     ("mirach-hardware", "Hardware status (GPU, temps, OC)", True),
     ("mirach-system-monitor", "System monitoring (btop, htop, free)", True),
@@ -909,6 +909,8 @@ def step_skills(tvars: dict, selected: list[str], total: int) -> None:
     if installed > 0:
         _update_opencode_config(str(OPENCODE_SKILLS_DIR))
         ok(f"{installed} skills installed to {OPENCODE_SKILLS_DIR}")
+        print(f"\n  {blue('💡')} You can add your own skills in {SKILLS_SRC}/")
+        print("     Drop a <name>/SKILL.md file there and re-run the installer to activate it.")
     else:
         warn("No skills installed")
 
