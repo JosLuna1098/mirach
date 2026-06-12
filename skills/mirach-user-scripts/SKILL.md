@@ -60,7 +60,7 @@ You create `user_scripts/focus_mode.sh`:
 # response: Modo focus activado.
 # description: Enables focus mode: nightlight on, Discord closed, lofi playing
 
-omarchy-toggle-nightlight
+hyprsunset -t 3500 &
 pkill -i discord 2>/dev/null
 mpv --no-video --really-quiet "https://www.youtube.com/watch?v=jfKfPfyJRdk" &
 disown

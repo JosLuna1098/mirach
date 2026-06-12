@@ -26,5 +26,5 @@ Commands for checking system status in real-time.
 
 - System monitoring: execute directly without asking.
 - Summarize results in 1-2 sentences (TTS output).
-- If btop is not installed, suggest `omarchy-install-btop` or `pacman -S btop`.
+- If btop is not installed: `sudo pacman -S btop` (or use the available AUR helper: `which yay paru`).
 - For GPU queries, always check if NVIDIA is available first with `nvidia-smi`.
