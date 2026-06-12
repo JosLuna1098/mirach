@@ -12,8 +12,8 @@ Place a `.sh` or `.py` file in `<mirach_dir>/user_scripts/` with metadata commen
 # response: Focus mode activated.
 # description: Enables focus mode by turning on nightlight and Do Not Disturb
 
-omarchy-toggle-nightlight
-notify-send "Focus mode" "Nightlight enabled, notifications muted"
+hyprsunset -t 3500 &
+notify-send "Focus mode" "Nightlight enabled"
 ```
 
 ## Metadata format
