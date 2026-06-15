@@ -84,7 +84,8 @@ class _ConversationScreenState extends State<ConversationScreen> {
   _Item? _activeConfirm;
   bool _connected = false;
   bool _sending = false;
-  bool _verboseOn = true;
+  bool _verboseOn = false; // razonamiento OFF por defecto (toggle en el menú)
+  bool _autoSendEnabled = true; // envío automático ON por defecto (toggle en el menú)
 
   final Map<String, _Item> _queuedByText = {};
 
@@ -111,7 +112,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
     _sse = SseClient();
     _inputCtrl.addListener(() => setState(() {}));
     _inputFocusNode.addListener(_onFocusChange);
-    _loadVerbose();
+    _loadPrefs();
     _startSse();
     _initStt();
   }
@@ -130,9 +131,14 @@ class _ConversationScreenState extends State<ConversationScreen> {
     super.dispose();
   }
 
-  Future<void> _loadVerbose() async {
+  Future<void> _loadPrefs() async {
     final v = await _storage.read(key: 'mirach_verbose');
-    if (mounted && v == '0') setState(() => _verboseOn = false);
+    final a = await _storage.read(key: 'mirach_autosend');
+    if (!mounted) return;
+    setState(() {
+      _verboseOn = v == '1'; // default OFF
+      _autoSendEnabled = a != '0'; // default ON
+    });
   }
 
   // ── SSE ───────────────────────────────────────────────────────────────────
@@ -336,6 +342,13 @@ class _ConversationScreenState extends State<ConversationScreen> {
     _storage.write(key: 'mirach_verbose', value: _verboseOn ? '1' : '0');
   }
 
+  void _toggleAutoSend() {
+    setState(() => _autoSendEnabled = !_autoSendEnabled);
+    _storage.write(key: 'mirach_autosend', value: _autoSendEnabled ? '1' : '0');
+    // Turning it off mid-countdown hands control back to the user.
+    if (!_autoSendEnabled && _autoSendRemaining > 0) _cancelAutoSend();
+  }
+
   void _logout() async {
     await _storage.delete(key: 'mirach_base_url');
     await _storage.delete(key: 'mirach_token');
@@ -425,6 +438,31 @@ class _ConversationScreenState extends State<ConversationScreen> {
     }
   }
 
+  /// First time auto-send fires, gently teach the user how to turn it off.
+  Future<void> _maybeShowAutoSendHint() async {
+    final shown = await _storage.read(key: 'mirach_autosend_hint');
+    if (shown == '1' || !mounted) return;
+    await _storage.write(key: 'mirach_autosend_hint', value: '1');
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text(
+          'Tu mensaje se envía solo tras unos segundos. ¿Prefieres revisarlo '
+          'antes? Apaga el envío automático desde el menú ⋮.',
+        ),
+        duration: const Duration(seconds: 6),
+        backgroundColor: const Color(0xFF1e2a1e),
+        behavior: SnackBarBehavior.floating,
+        action: SnackBarAction(
+          label: 'Entendido',
+          textColor: const Color(0xFF4caf50),
+          onPressed: () =>
+              ScaffoldMessenger.of(context).hideCurrentSnackBar(),
+        ),
+      ),
+    );
+  }
+
   // ── Mic / recording actions ───────────────────────────────────────────────
 
   Future<void> _onMicTap() async {
@@ -502,8 +540,17 @@ class _ConversationScreenState extends State<ConversationScreen> {
       if (!mounted) return;
       if (text.isNotEmpty) {
         _inputCtrl.text = text;
+        _inputCtrl.selection = TextSelection.fromPosition(
+          TextPosition(offset: text.length),
+        );
         setState(() => _sttStatus = _SttStatus.ready);
-        _startAutoSend(text);
+        if (_autoSendEnabled) {
+          _startAutoSend(text);
+          _maybeShowAutoSendHint();
+        } else {
+          // Manual mode: drop the text in, focused, and let the user send it.
+          FocusScope.of(context).requestFocus(_inputFocusNode);
+        }
       } else {
         setState(() => _sttStatus = _SttStatus.ready);
         if (durationAtStop.inSeconds >= 1) {
@@ -600,16 +647,6 @@ class _ConversationScreenState extends State<ConversationScreen> {
           ],
         ),
         actions: [
-          IconButton(
-            tooltip: 'Mostrar razonamiento del modelo',
-            onPressed: _toggleVerbose,
-            icon: Icon(
-              Icons.psychology,
-              color: _verboseOn
-                  ? const Color(0xFF4caf50)
-                  : const Color(0xFF666666),
-            ),
-          ),
           TextButton(
             onPressed: _stop,
             child: const Text(
@@ -618,13 +655,32 @@ class _ConversationScreenState extends State<ConversationScreen> {
             ),
           ),
           PopupMenuButton<String>(
+            color: const Color(0xFF1e1e1e),
             onSelected: (v) {
-              if (v == 'forget') _logout();
+              switch (v) {
+                case 'autosend':
+                  _toggleAutoSend();
+                case 'verbose':
+                  _toggleVerbose();
+                case 'forget':
+                  _logout();
+              }
             },
             itemBuilder: (_) => [
+              CheckedPopupMenuItem(
+                value: 'autosend',
+                checked: _autoSendEnabled,
+                child: const Text('Envío automático de voz'),
+              ),
+              CheckedPopupMenuItem(
+                value: 'verbose',
+                checked: _verboseOn,
+                child: const Text('Mostrar razonamiento'),
+              ),
+              const PopupMenuDivider(),
               const PopupMenuItem(
                 value: 'forget',
-                child: Text('Forget this device'),
+                child: Text('Olvidar este dispositivo'),
               ),
             ],
           ),
