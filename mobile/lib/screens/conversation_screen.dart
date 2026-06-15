@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:permission_handler/permission_handler.dart';
 
@@ -97,7 +96,6 @@ class _ConversationScreenState extends State<ConversationScreen> {
   Duration _recordDuration = Duration.zero;
   Timer? _recordTimer;
   _RecordMode _recordMode = _RecordMode.tap;
-  bool _pttCancelled = false;
 
   // ── Auto-send countdown ───────────────────────────────────────────────────
   double _autoSendRemaining = 0;
@@ -449,9 +447,10 @@ class _ConversationScreenState extends State<ConversationScreen> {
         content: const Text(
           'Tu mensaje se envía solo tras unos segundos. ¿Prefieres revisarlo '
           'antes? Apaga el envío automático desde el menú ⋮.',
+          style: TextStyle(color: Color(0xFFe8e8e8)),
         ),
         duration: const Duration(seconds: 6),
-        backgroundColor: const Color(0xFF1e2a1e),
+        backgroundColor: const Color(0xFF263326),
         behavior: SnackBarBehavior.floating,
         action: SnackBarAction(
           label: 'Entendido',
@@ -477,22 +476,12 @@ class _ConversationScreenState extends State<ConversationScreen> {
   void _onPttStart() {
     if (_sttStatus != _SttStatus.ready) return;
     _recordMode = _RecordMode.ptt;
-    _pttCancelled = false;
     _startRecording();
-  }
-
-  void _onPttMoveUpdate(LongPressMoveUpdateDetails d) {
-    if (_sttStatus != _SttStatus.recording || _pttCancelled) return;
-    if (d.offsetFromOrigin.dy < -80) {
-      _pttCancelled = true;
-      _cancelRecording();
-    }
   }
 
   void _onPttEnd() {
     if (_recordMode == _RecordMode.ptt &&
-        _sttStatus == _SttStatus.recording &&
-        !_pttCancelled) {
+        _sttStatus == _SttStatus.recording) {
       _stopAndTranscribe();
     }
   }
@@ -510,7 +499,6 @@ class _ConversationScreenState extends State<ConversationScreen> {
     setState(() {
       _sttStatus = _SttStatus.recording;
       _recordDuration = Duration.zero;
-      _pttCancelled = false;
     });
     _recordTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() => _recordDuration += const Duration(seconds: 1));
@@ -572,13 +560,6 @@ class _ConversationScreenState extends State<ConversationScreen> {
         } catch (_) {}
       }
     }
-  }
-
-  Future<void> _cancelRecording() async {
-    _recordTimer?.cancel();
-    await _recorder.cancel();
-    HapticFeedback.lightImpact();
-    if (mounted) setState(() => _sttStatus = _SttStatus.ready);
   }
 
   void _showMicPermissionDialog() {
@@ -714,7 +695,6 @@ class _ConversationScreenState extends State<ConversationScreen> {
             onSend: _send,
             onMicTap: _onMicTap,
             onPttStart: _onPttStart,
-            onPttMoveUpdate: _onPttMoveUpdate,
             onPttEnd: _onPttEnd,
           ),
         ],
@@ -1191,7 +1171,6 @@ class _InputBar extends StatelessWidget {
     required this.onSend,
     required this.onMicTap,
     required this.onPttStart,
-    required this.onPttMoveUpdate,
     required this.onPttEnd,
   });
 
@@ -1204,7 +1183,6 @@ class _InputBar extends StatelessWidget {
   final VoidCallback onSend;
   final VoidCallback onMicTap;
   final VoidCallback onPttStart;
-  final void Function(LongPressMoveUpdateDetails) onPttMoveUpdate;
   final VoidCallback onPttEnd;
 
   bool get _isRecording => sttStatus == _SttStatus.recording;
@@ -1254,7 +1232,6 @@ class _InputBar extends StatelessWidget {
                   status: sttStatus,
                   onTap: onMicTap,
                   onPttStart: onPttStart,
-                  onPttMoveUpdate: onPttMoveUpdate,
                   onPttEnd: onPttEnd,
                 ),
                 const SizedBox(width: 8),
@@ -1350,7 +1327,7 @@ class _RecordingDisplay extends StatelessWidget {
           const SizedBox(width: 10),
           const Expanded(
             child: Text(
-              'Grabando… ↑ cancelar',
+              'Grabando…',
               style: TextStyle(color: Color(0xFF777777), fontSize: 12),
               overflow: TextOverflow.ellipsis,
             ),
@@ -1401,14 +1378,12 @@ class _MicButton extends StatefulWidget {
     required this.status,
     required this.onTap,
     required this.onPttStart,
-    required this.onPttMoveUpdate,
     required this.onPttEnd,
   });
 
   final _SttStatus status;
   final VoidCallback onTap;
   final VoidCallback onPttStart;
-  final void Function(LongPressMoveUpdateDetails) onPttMoveUpdate;
   final VoidCallback onPttEnd;
 
   @override
@@ -1512,7 +1487,6 @@ class _MicButtonState extends State<_MicButton>
     return GestureDetector(
       onTap: widget.onTap,
       onLongPressStart: (_) => widget.onPttStart(),
-      onLongPressMoveUpdate: widget.onPttMoveUpdate,
       onLongPressEnd: (_) => widget.onPttEnd(),
       child: btn,
     );
