@@ -310,6 +310,12 @@ class OpenCodeServeBackend:
         response = _strip_markdown(full_text)
         elapsed = time.time() - t0
         self._last_interaction = time.time()
+        # Publish tool_call/tool_result from the REST message store. Newer
+        # opencode versions stop emitting message.part.updated on the SSE stream
+        # (only session.status/session.diff), so the live _publish_tool_part path
+        # never fires; the tool parts are only reachable via REST. The shared
+        # dedup sets keep this a no-op for versions that DID stream them.
+        self._publish_rest_tools(tool_called, tool_resulted)
         self._bus.publish(DoneEvent(content=response))
         log.info("opencode serve responded (%.2fs): %s", elapsed, response[:120])
 
@@ -441,6 +447,31 @@ class OpenCodeServeBackend:
         self._confirm_event.set()
 
     # ── tool part → bus events ───────────────────────────────────────────
+
+    def _publish_rest_tools(self, called: set, resulted: set) -> None:
+        """Publish tool_call/tool_result by reading the REST message store.
+
+        opencode >=1.14 no longer carries tool parts on the SSE event stream
+        (only session.status/session.diff), so the only place a finished turn's
+        tool calls survive is GET /session/{id}/message. Walk every assistant
+        message's parts and feed each `type=="tool"` part through the same
+        _publish_tool_part path used for streamed parts; the shared `called`/
+        `resulted` sets make it idempotent if both paths see the same callID.
+        """
+        if not self._session_id or not self._base_url:
+            return
+        try:
+            messages = self._http_get(f"/session/{self._session_id}/message")
+        except Exception as exc:
+            log.warning("could not fetch tool parts: %s", exc)
+            return
+        for msg in messages if isinstance(messages, list) else []:
+            info = msg.get("info", msg) if isinstance(msg, dict) else {}
+            if info.get("role") != "assistant":
+                continue
+            for part in msg.get("parts", []):
+                if isinstance(part, dict) and part.get("type") == "tool":
+                    self._publish_tool_part(part, called, resulted)
 
     def _publish_tool_part(self, part: dict, called: set, resulted: set) -> None:
         """Translate an opencode tool part state into tool_call/tool_result events.

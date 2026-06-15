@@ -368,6 +368,67 @@ def test_query_tool_parts_publish_call_and_result_once():
     assert result.response == "Two files."
 
 
+def test_query_publishes_tools_from_rest_when_stream_omits_them():
+    """opencode >=1.14 stops streaming message.part.updated (only session.status/
+    session.diff), so tool_call/tool_result must be recovered from the REST
+    message store after the turn — split across several assistant messages."""
+    bus = ConversationBus()
+    received: list[object] = []
+    bus.subscribe(received.append)
+    backend = _make_backend(bus=bus)
+
+    # SSE stream carries NO tool parts — just status churn then idle.
+    sse = [
+        {"type": "session.status", "properties": {"sessionID": "sess-1", "status": "working"}},
+        {"type": "session.diff", "properties": {"sessionID": "sess-1", "diff": ""}},
+        _session_idle(),
+    ]
+    # The REST store splits the turn: msg#1 holds the tool, msg#2 the answer.
+    messages = [
+        {"info": {"role": "user"}, "parts": [{"type": "text", "text": "list /tmp"}]},
+        {
+            "info": {"role": "assistant"},
+            "parts": [
+                {"type": "reasoning", "text": "let me list"},
+                {
+                    "type": "tool",
+                    "callID": "call-1",
+                    "tool": "bash",
+                    "state": {
+                        "status": "completed",
+                        "input": {"command": "ls /tmp"},
+                        "output": "file1\nfile2",
+                    },
+                },
+            ],
+        },
+        {
+            "info": {"role": "assistant"},
+            "parts": [{"type": "text", "text": "Ahí está la lista."}],
+        },
+    ]
+    with patch(
+        "urllib.request.urlopen",
+        side_effect=_mock_urlopen(sse, {"/session/sess-1/message": messages}),
+    ):
+        result = backend.query("list files", "")
+
+    calls = [e for e in received if isinstance(e, ToolCallEvent)]
+    results = [e for e in received if isinstance(e, ToolResultEvent)]
+    assert len(calls) == 1
+    assert calls[0].name == "bash"
+    assert calls[0].arguments == {"command": "ls /tmp"}
+    assert len(results) == 1
+    assert results[0].result == "file1\nfile2"
+    assert not results[0].error
+    assert result.response == "Ahí está la lista."
+    # tool events must be published BEFORE the DoneEvent so clients render the
+    # tool cards above the final answer.
+    types = [type(e).__name__ for e in received]
+    assert types.index("ToolCallEvent") < types.index("DoneEvent")
+    assert types.index("ToolResultEvent") < types.index("DoneEvent")
+
+
 def test_permission_asked_new_format_allow():
     """v1.14+ permission.asked (permission/patterns/tool.callID) is understood."""
     policy = MagicMock(spec=PolicyEngine)
