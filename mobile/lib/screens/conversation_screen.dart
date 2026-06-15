@@ -85,6 +85,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
   bool _sending = false;
   bool _verboseOn = false; // razonamiento OFF por defecto (toggle en el menú)
   bool _autoSendEnabled = true; // envío automático ON por defecto (toggle en el menú)
+  bool _toolCallsOn = true; // tarjetas de llamada a herramienta visibles
   bool _toolResultsOn = true; // resultados de herramientas visibles pero colapsados
 
   final Map<String, _Item> _queuedByText = {};
@@ -139,11 +140,13 @@ class _ConversationScreenState extends State<ConversationScreen> {
   Future<void> _loadPrefs() async {
     final v = await _storage.read(key: 'mirach_verbose');
     final a = await _storage.read(key: 'mirach_autosend');
+    final c = await _storage.read(key: 'mirach_toolcalls');
     final r = await _storage.read(key: 'mirach_toolresults');
     if (!mounted) return;
     setState(() {
       _verboseOn = v == '1'; // default OFF
       _autoSendEnabled = a != '0'; // default ON
+      _toolCallsOn = c != '0'; // default ON
       _toolResultsOn = r != '0'; // default ON (colapsado)
     });
     _showAutoSendHint(); // remind on every app open
@@ -355,6 +358,11 @@ class _ConversationScreenState extends State<ConversationScreen> {
     _storage.write(key: 'mirach_autosend', value: _autoSendEnabled ? '1' : '0');
     // Turning it off mid-countdown hands control back to the user.
     if (!_autoSendEnabled && _autoSendRemaining > 0) _cancelAutoSend();
+  }
+
+  void _toggleToolCalls() {
+    setState(() => _toolCallsOn = !_toolCallsOn);
+    _storage.write(key: 'mirach_toolcalls', value: _toolCallsOn ? '1' : '0');
   }
 
   void _toggleToolResults() {
@@ -659,6 +667,8 @@ class _ConversationScreenState extends State<ConversationScreen> {
                   _toggleAutoSend();
                 case 'verbose':
                   _toggleVerbose();
+                case 'toolcalls':
+                  _toggleToolCalls();
                 case 'toolresults':
                   _toggleToolResults();
                 case 'forget':
@@ -675,6 +685,11 @@ class _ConversationScreenState extends State<ConversationScreen> {
                 value: 'verbose',
                 checked: _verboseOn,
                 child: const Text('Mostrar razonamiento'),
+              ),
+              CheckedPopupMenuItem(
+                value: 'toolcalls',
+                checked: _toolCallsOn,
+                child: const Text('Mostrar llamadas a herramientas'),
               ),
               CheckedPopupMenuItem(
                 value: 'toolresults',
@@ -747,10 +762,10 @@ class _ConversationScreenState extends State<ConversationScreen> {
           initiallyExpanded: false,
         ),
         _ItemKind.assistantDone => _AssistantBubble(text: item.text),
-        _ItemKind.toolCall => _ToolCallCard(
-          name: item.toolName ?? '',
-          args: item.args ?? {},
-        ),
+        _ItemKind.toolCall =>
+          _toolCallsOn
+              ? _ToolCallCard(name: item.toolName ?? '', args: item.args ?? {})
+              : const SizedBox.shrink(),
         _ItemKind.toolResult =>
           _toolResultsOn
               ? _ToolResultCard(result: item.text, isError: item.isError)
