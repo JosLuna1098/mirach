@@ -1,10 +1,15 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:permission_handler/permission_handler.dart';
 
+import '../services/audio_recorder.dart';
 import '../services/mirach_api.dart';
 import '../services/sse_client.dart';
+import '../services/whisper_service.dart';
 import 'pairing_screen.dart';
 
 const _storage = FlutterSecureStorage();
@@ -14,9 +19,9 @@ const _storage = FlutterSecureStorage();
 enum _ItemKind {
   userTurn,
   userQueued,
-  assistantLive, // streaming reasoning (expandable) or "procesando…"
-  assistantVerbose, // collapsed reasoning kept after the turn finishes
-  assistantDone, // clean final answer bubble
+  assistantLive,
+  assistantVerbose,
+  assistantDone,
   toolCall,
   toolResult,
   awaitingConfirmation,
@@ -30,7 +35,6 @@ class _Item {
   String? toolCallId;
   String? toolName;
   bool isError;
-  // unique key so Flutter can track list items across rebuilds
   final Object key = Object();
 
   _Item({
@@ -42,6 +46,12 @@ class _Item {
     this.isError = false,
   });
 }
+
+// ── STT state ─────────────────────────────────────────────────────────────────
+
+enum _SttStatus { init, downloading, loading, ready, recording, transcribing, error }
+
+enum _RecordMode { tap, ptt }
 
 // ── Screen ────────────────────────────────────────────────────────────────────
 
@@ -60,22 +70,39 @@ class ConversationScreen extends StatefulWidget {
 }
 
 class _ConversationScreenState extends State<ConversationScreen> {
+  // ── Existing SSE / API state ──────────────────────────────────────────────
   late final MirachApi _api;
   late final SseClient _sse;
   StreamSubscription<Map<String, dynamic>>? _sub;
 
   final _inputCtrl = TextEditingController();
+  final _inputFocusNode = FocusNode();
   final _scrollCtrl = ScrollController();
 
   final List<_Item> _items = [];
-  _Item? _liveItem; // the streaming assistant bubble (settled on 'done')
-  _Item? _activeConfirm; // the only confirmation that should be actionable
+  _Item? _liveItem;
+  _Item? _activeConfirm;
   bool _connected = false;
   bool _sending = false;
-  bool _verboseOn = true; // show the model's reasoning stream
+  bool _verboseOn = true;
 
-  // queued bubbles keyed by text so user_turn can settle them
   final Map<String, _Item> _queuedByText = {};
+
+  // ── STT state ─────────────────────────────────────────────────────────────
+  final _whisper = WhisperService();
+  final _recorder = AudioRecorderService();
+  _SttStatus _sttStatus = _SttStatus.init;
+  double _downloadProgress = 0;
+  Duration _recordDuration = Duration.zero;
+  Timer? _recordTimer;
+  _RecordMode _recordMode = _RecordMode.tap;
+  bool _pttCancelled = false;
+
+  // ── Auto-send countdown ───────────────────────────────────────────────────
+  double _autoSendRemaining = 0;
+  Timer? _autoSendTimer;
+
+  // ── Lifecycle ─────────────────────────────────────────────────────────────
 
   @override
   void initState() {
@@ -83,8 +110,10 @@ class _ConversationScreenState extends State<ConversationScreen> {
     _api = MirachApi(baseUrl: widget.baseUrl, token: widget.token);
     _sse = SseClient();
     _inputCtrl.addListener(() => setState(() {}));
+    _inputFocusNode.addListener(_onFocusChange);
     _loadVerbose();
     _startSse();
+    _initStt();
   }
 
   @override
@@ -92,7 +121,12 @@ class _ConversationScreenState extends State<ConversationScreen> {
     _sub?.cancel();
     _sse.dispose();
     _inputCtrl.dispose();
+    _inputFocusNode.removeListener(_onFocusChange);
+    _inputFocusNode.dispose();
     _scrollCtrl.dispose();
+    _recordTimer?.cancel();
+    _autoSendTimer?.cancel();
+    _recorder.dispose();
     super.dispose();
   }
 
@@ -124,10 +158,6 @@ class _ConversationScreenState extends State<ConversationScreen> {
       _connected = true;
       final type = ev['type'] as String? ?? '';
 
-      // A confirmation is only actionable while it is the latest activity. Any
-      // subsequent event (tool_result, error, done, a new turn, an answer from
-      // another device/voice, or replayed history) retires it so its buttons
-      // can't be pressed again — fixes "stale buttons after reconnect".
       if (_activeConfirm != null && type != 'cost') {
         _activeConfirm!.toolCallId = null;
         _activeConfirm = null;
@@ -152,7 +182,6 @@ class _ConversationScreenState extends State<ConversationScreen> {
           _onAwaitingConfirmation(ev);
         case 'error':
           _onError(ev);
-        // 'cost' intentionally ignored in v1
       }
     });
     _scrollToBottom();
@@ -173,14 +202,13 @@ class _ConversationScreenState extends State<ConversationScreen> {
   }
 
   void _onUserTurn(Map<String, dynamic> ev) {
-    // Close any open live stream (e.g. an interrupted turn).
     _finalizeLive('');
     final text = ev['text'] as String? ?? '';
     final queued = _queuedByText.remove(text);
     if (queued != null) {
       queued.kind = _ItemKind.userTurn;
       _items.remove(queued);
-      _items.add(queued); // re-anchor at bottom so the response follows it
+      _items.add(queued);
     } else {
       _items.add(_Item(kind: _ItemKind.userTurn, text: text));
     }
@@ -200,9 +228,6 @@ class _ConversationScreenState extends State<ConversationScreen> {
     _finalizeLive(ev['content'] as String? ?? '');
   }
 
-  /// Settle the in-progress live stream into (optionally) a collapsed reasoning
-  /// block + a clean answer bubble. Mirrors the widget's onDone logic: the
-  /// reasoning is KEPT as a separate block, never replaced by the answer.
   void _finalizeLive(String content) {
     final streamed = _liveItem?.text ?? '';
     if (_liveItem != null) {
@@ -211,8 +236,6 @@ class _ConversationScreenState extends State<ConversationScreen> {
     }
     if (streamed.isEmpty && content.isEmpty) return;
 
-    // If the stream carried noticeably more than the final answer, it contained
-    // reasoning/work — keep it available in a collapsed block (verbose only).
     final hadVerbose =
         streamed.isNotEmpty &&
         content.isNotEmpty &&
@@ -221,8 +244,6 @@ class _ConversationScreenState extends State<ConversationScreen> {
       _items.add(_Item(kind: _ItemKind.assistantVerbose, text: streamed));
     }
 
-    // Final answer bubble: done.content (clean). On interrupt (empty content)
-    // keep whatever streamed so the partial turn stays readable.
     final finalText = content.isNotEmpty ? content : streamed;
     if (finalText.isNotEmpty) {
       _items.add(_Item(kind: _ItemKind.assistantDone, text: finalText));
@@ -258,7 +279,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
       args: ev['arguments'] as Map<String, dynamic>?,
     );
     _items.add(item);
-    _activeConfirm = item; // becomes the live, actionable confirmation
+    _activeConfirm = item;
   }
 
   void _onError(Map<String, dynamic> ev) {
@@ -270,7 +291,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
     );
   }
 
-  // ── Actions ───────────────────────────────────────────────────────────────
+  // ── Existing actions ──────────────────────────────────────────────────────
 
   Future<void> _send() async {
     final text = _inputCtrl.text.trim();
@@ -292,7 +313,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
 
   Future<void> _confirmAction(String toolCallId, _Item item) async {
     setState(() {
-      item.toolCallId = null; // disable buttons immediately
+      item.toolCallId = null;
       if (_activeConfirm == item) _activeConfirm = null;
     });
     try {
@@ -334,6 +355,220 @@ class _ConversationScreenState extends State<ConversationScreen> {
         );
       }
     });
+  }
+
+  // ── STT init ──────────────────────────────────────────────────────────────
+
+  Future<void> _initStt() async {
+    final cached = await _whisper.isModelCached();
+    if (!cached) {
+      if (!mounted) return;
+      setState(() => _sttStatus = _SttStatus.downloading);
+      try {
+        await _whisper.downloadModel(
+          onProgress: (p) {
+            if (mounted) setState(() => _downloadProgress = p);
+          },
+        );
+      } catch (_) {
+        if (mounted) setState(() => _sttStatus = _SttStatus.error);
+        return;
+      }
+    }
+    if (!mounted) return;
+    setState(() => _sttStatus = _SttStatus.loading);
+    try {
+      // whisper_ggml_plus loads the model lazily on first transcription call,
+      // so this just validates the path and transitions the status.
+      final ok = await _whisper.isModelCached();
+      setState(() => _sttStatus = ok ? _SttStatus.ready : _SttStatus.error);
+    } catch (_) {
+      if (mounted) setState(() => _sttStatus = _SttStatus.error);
+    }
+  }
+
+  // ── Focus / auto-send ─────────────────────────────────────────────────────
+
+  void _onFocusChange() {
+    if (_inputFocusNode.hasFocus && _autoSendRemaining > 0) {
+      _cancelAutoSend();
+    }
+  }
+
+  void _startAutoSend(String text) {
+    _autoSendTimer?.cancel();
+    setState(() => _autoSendRemaining = 2.5);
+    _autoSendTimer = Timer.periodic(const Duration(milliseconds: 100), (t) {
+      if (!mounted) {
+        t.cancel();
+        return;
+      }
+      setState(() {
+        _autoSendRemaining = (_autoSendRemaining - 0.1).clamp(0.0, 2.5);
+        if (_autoSendRemaining <= 0.05) {
+          _autoSendRemaining = 0;
+          t.cancel();
+          _autoSendTimer = null;
+          _send();
+        }
+      });
+    });
+  }
+
+  void _cancelAutoSend() {
+    _autoSendTimer?.cancel();
+    _autoSendTimer = null;
+    if (mounted) {
+      setState(() => _autoSendRemaining = 0);
+      // Focus the field so the user can edit immediately.
+      FocusScope.of(context).requestFocus(_inputFocusNode);
+    }
+  }
+
+  // ── Mic / recording actions ───────────────────────────────────────────────
+
+  Future<void> _onMicTap() async {
+    if (_sttStatus == _SttStatus.ready) {
+      _recordMode = _RecordMode.tap;
+      await _startRecording();
+    } else if (_sttStatus == _SttStatus.recording) {
+      await _stopAndTranscribe();
+    }
+  }
+
+  void _onPttStart() {
+    if (_sttStatus != _SttStatus.ready) return;
+    _recordMode = _RecordMode.ptt;
+    _pttCancelled = false;
+    _startRecording();
+  }
+
+  void _onPttMoveUpdate(LongPressMoveUpdateDetails d) {
+    if (_sttStatus != _SttStatus.recording || _pttCancelled) return;
+    if (d.offsetFromOrigin.dy < -80) {
+      _pttCancelled = true;
+      _cancelRecording();
+    }
+  }
+
+  void _onPttEnd() {
+    if (_recordMode == _RecordMode.ptt &&
+        _sttStatus == _SttStatus.recording &&
+        !_pttCancelled) {
+      _stopAndTranscribe();
+    }
+  }
+
+  Future<void> _startRecording() async {
+    var status = await Permission.microphone.status;
+    if (!status.isGranted) {
+      final result = await Permission.microphone.request();
+      if (!result.isGranted) {
+        if (mounted && result.isPermanentlyDenied) _showMicPermissionDialog();
+        return;
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      _sttStatus = _SttStatus.recording;
+      _recordDuration = Duration.zero;
+      _pttCancelled = false;
+    });
+    _recordTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() => _recordDuration += const Duration(seconds: 1));
+    });
+    try {
+      await _recorder.start();
+    } catch (_) {
+      _recordTimer?.cancel();
+      if (mounted) setState(() => _sttStatus = _SttStatus.ready);
+    }
+  }
+
+  Future<void> _stopAndTranscribe() async {
+    _recordTimer?.cancel();
+    if (!mounted) return;
+    final durationAtStop = _recordDuration;
+    setState(() => _sttStatus = _SttStatus.transcribing);
+
+    String? audioPath;
+    try {
+      audioPath = await _recorder.stop();
+      if (audioPath == null) {
+        setState(() => _sttStatus = _SttStatus.ready);
+        return;
+      }
+      final text = await _whisper.transcribe(audioPath);
+      if (!mounted) return;
+      if (text.isNotEmpty) {
+        _inputCtrl.text = text;
+        setState(() => _sttStatus = _SttStatus.ready);
+        _startAutoSend(text);
+      } else {
+        setState(() => _sttStatus = _SttStatus.ready);
+        if (durationAtStop.inSeconds >= 1) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('No se detectó voz'),
+              duration: Duration(seconds: 2),
+              backgroundColor: Color(0xFF333333),
+            ),
+          );
+        }
+      }
+    } catch (_) {
+      if (mounted) setState(() => _sttStatus = _SttStatus.ready);
+    } finally {
+      if (audioPath != null) {
+        try {
+          File(audioPath).deleteSync();
+        } catch (_) {}
+      }
+    }
+  }
+
+  Future<void> _cancelRecording() async {
+    _recordTimer?.cancel();
+    await _recorder.cancel();
+    HapticFeedback.lightImpact();
+    if (mounted) setState(() => _sttStatus = _SttStatus.ready);
+  }
+
+  void _showMicPermissionDialog() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1e1e1e),
+        title: const Text(
+          'Micrófono',
+          style: TextStyle(color: Color(0xFFe0e0e0)),
+        ),
+        content: const Text(
+          'El permiso de micrófono fue denegado permanentemente. '
+          'Actívalo en Ajustes para usar la entrada por voz.',
+          style: TextStyle(color: Color(0xFFaaaaaa)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text(
+              'Cancelar',
+              style: TextStyle(color: Color(0xFF888888)),
+            ),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              openAppSettings();
+            },
+            child: const Text(
+              'Ajustes',
+              style: TextStyle(color: Color(0xFF4caf50)),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   // ── Build ─────────────────────────────────────────────────────────────────
@@ -397,9 +632,13 @@ class _ConversationScreenState extends State<ConversationScreen> {
       ),
       body: Column(
         children: [
+          if (_sttStatus == _SttStatus.downloading ||
+              _sttStatus == _SttStatus.loading)
+            _DownloadBanner(
+              downloading: _sttStatus == _SttStatus.downloading,
+              progress: _downloadProgress,
+            ),
           Expanded(
-            // SelectionArea makes every text bubble selectable + copyable
-            // (long-press to start a selection); buttons inside still work.
             child: SelectionArea(
               child: ListView.builder(
                 controller: _scrollCtrl,
@@ -409,7 +648,19 @@ class _ConversationScreenState extends State<ConversationScreen> {
               ),
             ),
           ),
-          _InputBar(controller: _inputCtrl, sending: _sending, onSend: _send),
+          _InputBar(
+            controller: _inputCtrl,
+            focusNode: _inputFocusNode,
+            sending: _sending,
+            sttStatus: _sttStatus,
+            recordDuration: _recordDuration,
+            autoSendRemaining: _autoSendRemaining,
+            onSend: _send,
+            onMicTap: _onMicTap,
+            onPttStart: _onPttStart,
+            onPttMoveUpdate: _onPttMoveUpdate,
+            onPttEnd: _onPttEnd,
+          ),
         ],
       ),
     );
@@ -462,7 +713,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
   }
 }
 
-// ── Bubble / card widgets ─────────────────────────────────────────────────────
+// ── Bubble / card widgets (unchanged from Slice 1) ────────────────────────────
 
 class _UserBubble extends StatelessWidget {
   const _UserBubble({required this.text, this.queued = false});
@@ -544,8 +795,6 @@ class _ProcessingBubble extends StatelessWidget {
   }
 }
 
-/// Collapsible reasoning block (the model's working stream), kept separate from
-/// the final answer. Tap the header to expand/collapse.
 class _ReasoningBlock extends StatefulWidget {
   const _ReasoningBlock({
     required this.header,
@@ -575,7 +824,9 @@ class _ReasoningBlockState extends State<_ReasoningBlock> {
         decoration: BoxDecoration(
           color: const Color(0xFF161616),
           border: Border.all(
-            color: widget.live ? const Color(0xFF4caf50) : const Color(0xFF333333),
+            color: widget.live
+                ? const Color(0xFF4caf50)
+                : const Color(0xFF333333),
           ),
           borderRadius: BorderRadius.circular(8),
         ),
@@ -585,10 +836,7 @@ class _ReasoningBlockState extends State<_ReasoningBlock> {
             InkWell(
               onTap: () => setState(() => _expanded = !_expanded),
               child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 7,
-                ),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
                 child: Row(
                   children: [
                     Expanded(
@@ -835,70 +1083,382 @@ class _ErrorNotice extends StatelessWidget {
   }
 }
 
+// ── Download progress banner ──────────────────────────────────────────────────
+
+class _DownloadBanner extends StatelessWidget {
+  const _DownloadBanner({
+    required this.downloading,
+    required this.progress,
+  });
+
+  final bool downloading;
+  final double progress;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      color: const Color(0xFF151515),
+      padding: const EdgeInsets.fromLTRB(14, 6, 14, 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            downloading
+                ? 'Descargando modelo de voz (${(progress * 100).toStringAsFixed(0)}%)…'
+                : 'Cargando modelo de voz…',
+            style: const TextStyle(color: Color(0xFF777777), fontSize: 12),
+          ),
+          const SizedBox(height: 4),
+          LinearProgressIndicator(
+            value: downloading ? progress : null,
+            backgroundColor: const Color(0xFF2a2a2a),
+            valueColor: const AlwaysStoppedAnimation(Color(0xFF4caf50)),
+            minHeight: 2,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 // ── Input bar ─────────────────────────────────────────────────────────────────
 
 class _InputBar extends StatelessWidget {
   const _InputBar({
     required this.controller,
+    required this.focusNode,
     required this.sending,
+    required this.sttStatus,
+    required this.recordDuration,
+    required this.autoSendRemaining,
     required this.onSend,
+    required this.onMicTap,
+    required this.onPttStart,
+    required this.onPttMoveUpdate,
+    required this.onPttEnd,
   });
 
   final TextEditingController controller;
+  final FocusNode focusNode;
   final bool sending;
+  final _SttStatus sttStatus;
+  final Duration recordDuration;
+  final double autoSendRemaining;
   final VoidCallback onSend;
+  final VoidCallback onMicTap;
+  final VoidCallback onPttStart;
+  final void Function(LongPressMoveUpdateDetails) onPttMoveUpdate;
+  final VoidCallback onPttEnd;
+
+  bool get _isRecording => sttStatus == _SttStatus.recording;
+  bool get _isTranscribing => sttStatus == _SttStatus.transcribing;
 
   @override
   Widget build(BuildContext context) {
-    final canSend = controller.text.trim().isNotEmpty && !sending;
+    final canSend =
+        controller.text.trim().isNotEmpty && !sending && !_isRecording && !_isTranscribing;
+
     return Container(
-      padding: const EdgeInsets.fromLTRB(14, 8, 14, 14),
       decoration: const BoxDecoration(
         color: Color(0xFF1a1a1a),
         border: Border(top: BorderSide(color: Color(0xFF2a2a2a))),
       ),
-      child: Row(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Expanded(
-            child: TextField(
-              controller: controller,
-              style: const TextStyle(color: Color(0xFFe0e0e0), fontSize: 14),
-              onSubmitted: (_) => onSend(),
-              decoration: InputDecoration(
-                hintText: 'Type a message…',
-                hintStyle: const TextStyle(color: Color(0xFF555555)),
-                filled: true,
-                fillColor: const Color(0xFF252525),
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 13,
-                  vertical: 9,
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  borderSide: const BorderSide(color: Color(0xFF383838)),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  borderSide: const BorderSide(color: Color(0xFF4caf50)),
-                ),
+          // Auto-send countdown chip
+          if (autoSendRemaining > 0)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(56, 6, 14, 0),
+              child: Row(
+                children: [
+                  const Icon(Icons.edit, size: 13, color: Color(0xFF4caf50)),
+                  const SizedBox(width: 5),
+                  Expanded(
+                    child: Text(
+                      'Enviando en ${autoSendRemaining.toStringAsFixed(1)}s · toca el campo para editar',
+                      style: const TextStyle(
+                        color: Color(0xFF666666),
+                        fontSize: 11,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
-          ),
-          const SizedBox(width: 8),
-          ElevatedButton(
-            onPressed: canSend ? onSend : null,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF2e7d32),
-              disabledBackgroundColor: const Color(0xFF1a2a1a),
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-              ),
+          // Main row
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 8, 14, 14),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                _MicButton(
+                  status: sttStatus,
+                  onTap: onMicTap,
+                  onPttStart: onPttStart,
+                  onPttMoveUpdate: onPttMoveUpdate,
+                  onPttEnd: onPttEnd,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: _isRecording
+                      ? _RecordingDisplay(duration: recordDuration)
+                      : _isTranscribing
+                          ? _TranscribingDisplay()
+                          : TextField(
+                              controller: controller,
+                              focusNode: focusNode,
+                              style: const TextStyle(
+                                color: Color(0xFFe0e0e0),
+                                fontSize: 14,
+                              ),
+                              onSubmitted: canSend ? (_) => onSend() : null,
+                              decoration: InputDecoration(
+                                hintText: 'Type a message…',
+                                hintStyle: const TextStyle(
+                                  color: Color(0xFF555555),
+                                ),
+                                filled: true,
+                                fillColor: const Color(0xFF252525),
+                                contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 13,
+                                  vertical: 9,
+                                ),
+                                enabledBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                  borderSide: const BorderSide(
+                                    color: Color(0xFF383838),
+                                  ),
+                                ),
+                                focusedBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                  borderSide: const BorderSide(
+                                    color: Color(0xFF4caf50),
+                                  ),
+                                ),
+                              ),
+                            ),
+                ),
+                const SizedBox(width: 8),
+                if (!_isRecording && !_isTranscribing)
+                  ElevatedButton(
+                    onPressed: canSend ? onSend : null,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF2e7d32),
+                      disabledBackgroundColor: const Color(0xFF1a2a1a),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                    child: const Text('Send', style: TextStyle(fontSize: 14)),
+                  ),
+              ],
             ),
-            child: const Text('Send', style: TextStyle(fontSize: 14)),
           ),
         ],
       ),
+    );
+  }
+}
+
+class _RecordingDisplay extends StatelessWidget {
+  const _RecordingDisplay({required this.duration});
+  final Duration duration;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF2a1515),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFF5a2222)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.circle, color: Color(0xFFef5350), size: 9),
+          const SizedBox(width: 7),
+          Text(
+            _formatDuration(duration),
+            style: const TextStyle(
+              color: Color(0xFFe0a0a0),
+              fontSize: 14,
+            ),
+          ),
+          const SizedBox(width: 10),
+          const Expanded(
+            child: Text(
+              'Grabando… ↑ cancelar',
+              style: TextStyle(color: Color(0xFF777777), fontSize: 12),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TranscribingDisplay extends StatelessWidget {
+  const _TranscribingDisplay();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 10),
+      decoration: BoxDecoration(
+        color: const Color(0xFF252525),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFF383838)),
+      ),
+      child: const Row(
+        children: [
+          SizedBox(
+            width: 14,
+            height: 14,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: Color(0xFF4caf50),
+            ),
+          ),
+          SizedBox(width: 9),
+          Text(
+            'Transcribiendo…',
+            style: TextStyle(color: Color(0xFF888888), fontSize: 14),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Mic FAB ───────────────────────────────────────────────────────────────────
+
+class _MicButton extends StatefulWidget {
+  const _MicButton({
+    required this.status,
+    required this.onTap,
+    required this.onPttStart,
+    required this.onPttMoveUpdate,
+    required this.onPttEnd,
+  });
+
+  final _SttStatus status;
+  final VoidCallback onTap;
+  final VoidCallback onPttStart;
+  final void Function(LongPressMoveUpdateDetails) onPttMoveUpdate;
+  final VoidCallback onPttEnd;
+
+  @override
+  State<_MicButton> createState() => _MicButtonState();
+}
+
+class _MicButtonState extends State<_MicButton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _pulse;
+  late final Animation<double> _scale;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulse = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 600),
+    );
+    _scale = Tween<double>(
+      begin: 1.0,
+      end: 1.22,
+    ).animate(CurvedAnimation(parent: _pulse, curve: Curves.easeInOut));
+  }
+
+  @override
+  void didUpdateWidget(_MicButton old) {
+    super.didUpdateWidget(old);
+    final recording = widget.status == _SttStatus.recording;
+    if (recording && !_pulse.isAnimating) {
+      _pulse.repeat(reverse: true);
+    } else if (!recording && _pulse.isAnimating) {
+      _pulse.stop();
+      _pulse.reset();
+    }
+  }
+
+  @override
+  void dispose() {
+    _pulse.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final st = widget.status;
+    final isRecording = st == _SttStatus.recording;
+    final isReady = st == _SttStatus.ready;
+    final isBusy = st == _SttStatus.loading ||
+        st == _SttStatus.transcribing ||
+        st == _SttStatus.init;
+
+    Widget icon;
+    Color bg;
+    Color border;
+
+    if (isRecording) {
+      icon = const Icon(Icons.stop_rounded, color: Colors.white, size: 20);
+      bg = const Color(0xFFc62828);
+      border = const Color(0xFFef5350);
+    } else if (isBusy) {
+      icon = const SizedBox(
+        width: 16,
+        height: 16,
+        child: CircularProgressIndicator(
+          strokeWidth: 2,
+          color: Color(0xFF4caf50),
+        ),
+      );
+      bg = const Color(0xFF252525);
+      border = const Color(0xFF383838);
+    } else if (st == _SttStatus.downloading) {
+      icon = const Icon(Icons.downloading, color: Color(0xFF4caf50), size: 20);
+      bg = const Color(0xFF252525);
+      border = const Color(0xFF383838);
+    } else if (isReady) {
+      icon = const Icon(Icons.mic, color: Color(0xFF4caf50), size: 20);
+      bg = const Color(0xFF252525);
+      border = const Color(0xFF383838);
+    } else {
+      // error
+      icon = const Icon(Icons.mic_off, color: Color(0xFFf44336), size: 20);
+      bg = const Color(0xFF1e1e1e);
+      border = const Color(0xFF5a2222);
+    }
+
+    Widget btn = Container(
+      width: 40,
+      height: 40,
+      decoration: BoxDecoration(
+        color: bg,
+        shape: BoxShape.circle,
+        border: Border.all(color: border),
+      ),
+      child: Center(child: icon),
+    );
+
+    if (isRecording) {
+      btn = ScaleTransition(scale: _scale, child: btn);
+    }
+
+    return GestureDetector(
+      onTap: widget.onTap,
+      onLongPressStart: (_) => widget.onPttStart(),
+      onLongPressMoveUpdate: widget.onPttMoveUpdate,
+      onLongPressEnd: (_) => widget.onPttEnd(),
+      child: btn,
     );
   }
 }
@@ -912,4 +1472,10 @@ String _prettyArgs(Map<String, dynamic> args) {
     sb.writeln('  ${e.key}: ${e.value}');
   }
   return sb.toString().trimRight();
+}
+
+String _formatDuration(Duration d) {
+  final m = d.inMinutes.remainder(60);
+  final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+  return '$m:$s';
 }
