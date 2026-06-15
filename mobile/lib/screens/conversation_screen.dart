@@ -85,6 +85,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
   bool _sending = false;
   bool _verboseOn = false; // razonamiento OFF por defecto (toggle en el menú)
   bool _autoSendEnabled = true; // envío automático ON por defecto (toggle en el menú)
+  bool _toolResultsOn = true; // resultados de herramientas visibles pero colapsados
 
   final Map<String, _Item> _queuedByText = {};
 
@@ -129,14 +130,23 @@ class _ConversationScreenState extends State<ConversationScreen> {
     super.dispose();
   }
 
+  @override
+  void reassemble() {
+    super.reassemble();
+    _showAutoSendHint(); // re-show the reminder on every hot-reload
+  }
+
   Future<void> _loadPrefs() async {
     final v = await _storage.read(key: 'mirach_verbose');
     final a = await _storage.read(key: 'mirach_autosend');
+    final r = await _storage.read(key: 'mirach_toolresults');
     if (!mounted) return;
     setState(() {
       _verboseOn = v == '1'; // default OFF
       _autoSendEnabled = a != '0'; // default ON
+      _toolResultsOn = r != '0'; // default ON (colapsado)
     });
+    _showAutoSendHint(); // remind on every app open
   }
 
   // ── SSE ───────────────────────────────────────────────────────────────────
@@ -347,6 +357,11 @@ class _ConversationScreenState extends State<ConversationScreen> {
     if (!_autoSendEnabled && _autoSendRemaining > 0) _cancelAutoSend();
   }
 
+  void _toggleToolResults() {
+    setState(() => _toolResultsOn = !_toolResultsOn);
+    _storage.write(key: 'mirach_toolresults', value: _toolResultsOn ? '1' : '0');
+  }
+
   void _logout() async {
     await _storage.delete(key: 'mirach_base_url');
     await _storage.delete(key: 'mirach_token');
@@ -436,30 +451,32 @@ class _ConversationScreenState extends State<ConversationScreen> {
     }
   }
 
-  /// First time auto-send fires, gently teach the user how to turn it off.
-  Future<void> _maybeShowAutoSendHint() async {
-    final shown = await _storage.read(key: 'mirach_autosend_hint');
-    if (shown == '1' || !mounted) return;
-    await _storage.write(key: 'mirach_autosend_hint', value: '1');
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: const Text(
-          'Tu mensaje se envía solo tras unos segundos. ¿Prefieres revisarlo '
-          'antes? Apaga el envío automático desde el menú ⋮.',
-          style: TextStyle(color: Color(0xFFe8e8e8)),
+  /// Reminds the user that voice turns auto-send and how to turn it off.
+  /// Shown on every app open / hot-reload, but only while auto-send is on.
+  void _showAutoSendHint() {
+    if (!_autoSendEnabled) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_autoSendEnabled) return;
+      final messenger = ScaffoldMessenger.of(context);
+      messenger.clearSnackBars(); // don't stack across rapid reloads
+      messenger.showSnackBar(
+        SnackBar(
+          content: const Text(
+            'Tu mensaje de voz se envía solo tras unos segundos. ¿Prefieres '
+            'revisarlo antes? Apaga el envío automático desde el menú ⋮.',
+            style: TextStyle(color: Color(0xFFe8e8e8)),
+          ),
+          duration: const Duration(seconds: 5),
+          backgroundColor: const Color(0xFF263326),
+          behavior: SnackBarBehavior.floating,
+          action: SnackBarAction(
+            label: 'Entendido',
+            textColor: const Color(0xFF4caf50),
+            onPressed: () => messenger.hideCurrentSnackBar(),
+          ),
         ),
-        duration: const Duration(seconds: 6),
-        backgroundColor: const Color(0xFF263326),
-        behavior: SnackBarBehavior.floating,
-        action: SnackBarAction(
-          label: 'Entendido',
-          textColor: const Color(0xFF4caf50),
-          onPressed: () =>
-              ScaffoldMessenger.of(context).hideCurrentSnackBar(),
-        ),
-      ),
-    );
+      );
+    });
   }
 
   // ── Mic / recording actions ───────────────────────────────────────────────
@@ -534,7 +551,6 @@ class _ConversationScreenState extends State<ConversationScreen> {
         setState(() => _sttStatus = _SttStatus.ready);
         if (_autoSendEnabled) {
           _startAutoSend(text);
-          _maybeShowAutoSendHint();
         } else {
           // Manual mode: drop the text in, focused, and let the user send it.
           FocusScope.of(context).requestFocus(_inputFocusNode);
@@ -643,6 +659,8 @@ class _ConversationScreenState extends State<ConversationScreen> {
                   _toggleAutoSend();
                 case 'verbose':
                   _toggleVerbose();
+                case 'toolresults':
+                  _toggleToolResults();
                 case 'forget':
                   _logout();
               }
@@ -657,6 +675,11 @@ class _ConversationScreenState extends State<ConversationScreen> {
                 value: 'verbose',
                 checked: _verboseOn,
                 child: const Text('Mostrar razonamiento'),
+              ),
+              CheckedPopupMenuItem(
+                value: 'toolresults',
+                checked: _toolResultsOn,
+                child: const Text('Mostrar resultados de herramientas'),
               ),
               const PopupMenuDivider(),
               const PopupMenuItem(
@@ -728,10 +751,10 @@ class _ConversationScreenState extends State<ConversationScreen> {
           name: item.toolName ?? '',
           args: item.args ?? {},
         ),
-        _ItemKind.toolResult => _ToolResultCard(
-          result: item.text,
-          isError: item.isError,
-        ),
+        _ItemKind.toolResult =>
+          _toolResultsOn
+              ? _ToolResultCard(result: item.text, isError: item.isError)
+              : const SizedBox.shrink(),
         _ItemKind.awaitingConfirmation => _ConfirmCard(
           name: item.toolName ?? '',
           args: item.args ?? {},
@@ -954,15 +977,26 @@ class _ToolCallCard extends StatelessWidget {
   }
 }
 
-class _ToolResultCard extends StatelessWidget {
+/// Tool output, collapsed by default (the verbose part). Tap the header to
+/// expand. Visibility itself is gated by the 'Mostrar resultados' toggle.
+class _ToolResultCard extends StatefulWidget {
   const _ToolResultCard({required this.result, required this.isError});
   final String result;
   final bool isError;
 
   @override
+  State<_ToolResultCard> createState() => _ToolResultCardState();
+}
+
+class _ToolResultCardState extends State<_ToolResultCard> {
+  bool _expanded = false;
+
+  @override
   Widget build(BuildContext context) {
+    final accent = widget.isError
+        ? const Color(0xFFf44336)
+        : const Color(0xFF60c060);
     return Container(
-      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: const Color(0xFF0f1e10),
         border: Border.all(color: const Color(0xFF1e4020)),
@@ -971,28 +1005,46 @@ class _ToolResultCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            isError ? '✗ error' : '✓ result',
-            style: TextStyle(
-              color: isError
-                  ? const Color(0xFFf44336)
-                  : const Color(0xFF60c060),
-              fontWeight: FontWeight.bold,
-              fontFamily: 'monospace',
-              fontSize: 12,
+          InkWell(
+            onTap: () => setState(() => _expanded = !_expanded),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      widget.isError ? '✗ error' : '✓ result',
+                      style: TextStyle(
+                        color: accent,
+                        fontWeight: FontWeight.bold,
+                        fontFamily: 'monospace',
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                  Icon(
+                    _expanded ? Icons.expand_less : Icons.expand_more,
+                    size: 18,
+                    color: accent,
+                  ),
+                ],
+              ),
             ),
           ),
-          const SizedBox(height: 4),
-          Text(
-            result,
-            style: TextStyle(
-              color: isError
-                  ? const Color(0xFFff8080)
-                  : const Color(0xFF4a9a4a),
-              fontFamily: 'monospace',
-              fontSize: 11,
+          if (_expanded)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+              child: Text(
+                widget.result,
+                style: TextStyle(
+                  color: widget.isError
+                      ? const Color(0xFFff8080)
+                      : const Color(0xFF4a9a4a),
+                  fontFamily: 'monospace',
+                  fontSize: 11,
+                ),
+              ),
             ),
-          ),
         ],
       ),
     );
