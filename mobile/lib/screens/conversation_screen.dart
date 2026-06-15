@@ -8,10 +8,15 @@ import 'package:permission_handler/permission_handler.dart';
 import '../services/audio_recorder.dart';
 import '../services/mirach_api.dart';
 import '../services/sse_client.dart';
+import '../services/tts_service.dart';
 import '../services/whisper_service.dart';
 import 'pairing_screen.dart';
 
 const _storage = FlutterSecureStorage();
+
+// ── TTS mode ──────────────────────────────────────────────────────────────────
+
+enum _TtsMode { auto, always, never }
 
 // ── Conversation item model ───────────────────────────────────────────────────
 
@@ -69,7 +74,7 @@ class ConversationScreen extends StatefulWidget {
 }
 
 class _ConversationScreenState extends State<ConversationScreen> {
-  // ── Existing SSE / API state ──────────────────────────────────────────────
+  // ── SSE / API ─────────────────────────────────────────────────────────────
   late final MirachApi _api;
   late final SseClient _sse;
   StreamSubscription<Map<String, dynamic>>? _sub;
@@ -83,14 +88,14 @@ class _ConversationScreenState extends State<ConversationScreen> {
   _Item? _activeConfirm;
   bool _connected = false;
   bool _sending = false;
-  bool _verboseOn = false; // razonamiento OFF por defecto (toggle en el menú)
-  bool _autoSendEnabled = true; // envío automático ON por defecto (toggle en el menú)
-  bool _toolCallsOn = true; // tarjetas de llamada a herramienta visibles
-  bool _toolResultsOn = true; // resultados de herramientas visibles pero colapsados
+  bool _verboseOn = false;
+  bool _autoSendEnabled = true;
+  bool _toolCallsOn = true;
+  bool _toolResultsOn = true;
 
   final Map<String, _Item> _queuedByText = {};
 
-  // ── STT state ─────────────────────────────────────────────────────────────
+  // ── STT ───────────────────────────────────────────────────────────────────
   final _whisper = WhisperService();
   final _recorder = AudioRecorderService();
   _SttStatus _sttStatus = _SttStatus.init;
@@ -99,9 +104,24 @@ class _ConversationScreenState extends State<ConversationScreen> {
   Timer? _recordTimer;
   _RecordMode _recordMode = _RecordMode.tap;
 
-  // ── Auto-send countdown ───────────────────────────────────────────────────
+  // ── Auto-send ─────────────────────────────────────────────────────────────
   double _autoSendRemaining = 0;
   Timer? _autoSendTimer;
+  // Set to the transcribed text while the countdown runs; cleared on send/cancel.
+  String? _pendingVoiceTurnText;
+
+  // ── TTS ───────────────────────────────────────────────────────────────────
+  final _tts = TtsService();
+  StreamSubscription<bool>? _ttsSub;
+  _TtsMode _ttsMode = _TtsMode.auto;
+  bool _isSpeaking = false;
+  // Voice-origin tracking: matched on the SSE user_turn event.
+  String? _lastSentText;
+  bool _lastSentWasVoice = false;
+  bool _currentTurnIsVoice = false;
+
+  // ── Settings popover ──────────────────────────────────────────────────────
+  bool _settingsOpen = false;
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -115,6 +135,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
     _loadPrefs();
     _startSse();
     _initStt();
+    _initTts();
   }
 
   @override
@@ -128,13 +149,15 @@ class _ConversationScreenState extends State<ConversationScreen> {
     _recordTimer?.cancel();
     _autoSendTimer?.cancel();
     _recorder.dispose();
+    _ttsSub?.cancel();
+    _tts.dispose();
     super.dispose();
   }
 
   @override
   void reassemble() {
     super.reassemble();
-    _showAutoSendHint(); // re-show the reminder on every hot-reload
+    _showAutoSendHint();
   }
 
   Future<void> _loadPrefs() async {
@@ -142,14 +165,27 @@ class _ConversationScreenState extends State<ConversationScreen> {
     final a = await _storage.read(key: 'mirach_autosend');
     final c = await _storage.read(key: 'mirach_toolcalls');
     final r = await _storage.read(key: 'mirach_toolresults');
+    final t = await _storage.read(key: 'mirach_tts_mode');
     if (!mounted) return;
     setState(() {
-      _verboseOn = v == '1'; // default OFF
-      _autoSendEnabled = a != '0'; // default ON
-      _toolCallsOn = c != '0'; // default ON
-      _toolResultsOn = r != '0'; // default ON (colapsado)
+      _verboseOn = v == '1';
+      _autoSendEnabled = a != '0';
+      _toolCallsOn = c != '0';
+      _toolResultsOn = r != '0';
+      _ttsMode = switch (t) {
+        'always' => _TtsMode.always,
+        'never' => _TtsMode.never,
+        _ => _TtsMode.auto,
+      };
     });
-    _showAutoSendHint(); // remind on every app open
+    _showAutoSendHint();
+  }
+
+  Future<void> _initTts() async {
+    await _tts.init();
+    _ttsSub = _tts.speakingStream.listen((speaking) {
+      if (mounted) setState(() => _isSpeaking = speaking);
+    });
   }
 
   // ── SSE ───────────────────────────────────────────────────────────────────
@@ -171,6 +207,10 @@ class _ConversationScreenState extends State<ConversationScreen> {
   }
 
   void _handleEvent(Map<String, dynamic> ev) {
+    // These are resolved after setState to avoid calling async in setState.
+    bool needsStopTts = false;
+    String? pendingTts;
+
     setState(() {
       _connected = true;
       final type = ev['type'] as String? ?? '';
@@ -186,11 +226,13 @@ class _ConversationScreenState extends State<ConversationScreen> {
         case 'queue_cleared':
           _onQueueCleared();
         case 'user_turn':
+          needsStopTts = true;
+          _isSpeaking = false;
           _onUserTurn(ev);
         case 'text_delta':
           _onTextDelta(ev);
         case 'done':
-          _onDone(ev);
+          pendingTts = _handleDone(ev);
         case 'tool_call':
           _onToolCall(ev);
         case 'tool_result':
@@ -198,9 +240,14 @@ class _ConversationScreenState extends State<ConversationScreen> {
         case 'awaiting_confirmation':
           _onAwaitingConfirmation(ev);
         case 'error':
+          needsStopTts = true;
+          _isSpeaking = false;
           _onError(ev);
       }
     });
+
+    if (needsStopTts) unawaited(_tts.stop());
+    if (pendingTts != null) unawaited(_tts.speak(pendingTts!));
     _scrollToBottom();
   }
 
@@ -221,6 +268,15 @@ class _ConversationScreenState extends State<ConversationScreen> {
   void _onUserTurn(Map<String, dynamic> ev) {
     _finalizeLive('');
     final text = ev['text'] as String? ?? '';
+    // Match to locally-sent turn to determine voice vs text origin.
+    if (_lastSentText != null && text == _lastSentText) {
+      _currentTurnIsVoice = _lastSentWasVoice;
+      _lastSentText = null;
+      _lastSentWasVoice = false;
+    } else {
+      // Turn from another device or a replay — don't auto-read.
+      _currentTurnIsVoice = false;
+    }
     final queued = _queuedByText.remove(text);
     if (queued != null) {
       queued.kind = _ItemKind.userTurn;
@@ -241,8 +297,22 @@ class _ConversationScreenState extends State<ConversationScreen> {
     }
   }
 
-  void _onDone(Map<String, dynamic> ev) {
-    _finalizeLive(ev['content'] as String? ?? '');
+  // Called inside setState — returns text to speak (or null). Resets voice flag.
+  String? _handleDone(Map<String, dynamic> ev) {
+    final content = ev['content'] as String? ?? '';
+    _finalizeLive(content);
+    final shouldSpeak = _computeShouldSpeak(content);
+    _currentTurnIsVoice = false;
+    return shouldSpeak ? content : null;
+  }
+
+  bool _computeShouldSpeak(String content) {
+    if (content.isEmpty) return false;
+    return switch (_ttsMode) {
+      _TtsMode.never => false,
+      _TtsMode.always => true,
+      _TtsMode.auto => _currentTurnIsVoice,
+    };
   }
 
   void _finalizeLive(String content) {
@@ -308,13 +378,22 @@ class _ConversationScreenState extends State<ConversationScreen> {
     );
   }
 
-  // ── Existing actions ──────────────────────────────────────────────────────
+  // ── Actions ───────────────────────────────────────────────────────────────
 
   Future<void> _send() async {
     final text = _inputCtrl.text.trim();
     if (text.isEmpty || _sending) return;
+    // Detect voice origin: a voice turn has its text stored in _pendingVoiceTurnText.
+    final isVoice = _pendingVoiceTurnText == text;
+    _pendingVoiceTurnText = null;
+    _lastSentText = text;
+    _lastSentWasVoice = isVoice;
     _inputCtrl.clear();
-    setState(() => _sending = true);
+    setState(() {
+      _sending = true;
+      _isSpeaking = false; // update UI immediately
+    });
+    unawaited(_tts.stop()); // local stop only
     try {
       await _api.turn(text);
     } finally {
@@ -356,7 +435,6 @@ class _ConversationScreenState extends State<ConversationScreen> {
   void _toggleAutoSend() {
     setState(() => _autoSendEnabled = !_autoSendEnabled);
     _storage.write(key: 'mirach_autosend', value: _autoSendEnabled ? '1' : '0');
-    // Turning it off mid-countdown hands control back to the user.
     if (!_autoSendEnabled && _autoSendRemaining > 0) _cancelAutoSend();
   }
 
@@ -368,6 +446,18 @@ class _ConversationScreenState extends State<ConversationScreen> {
   void _toggleToolResults() {
     setState(() => _toolResultsOn = !_toolResultsOn);
     _storage.write(key: 'mirach_toolresults', value: _toolResultsOn ? '1' : '0');
+  }
+
+  void _setTtsMode(_TtsMode mode) {
+    setState(() => _ttsMode = mode);
+    _storage.write(
+      key: 'mirach_tts_mode',
+      value: switch (mode) {
+        _TtsMode.auto => 'auto',
+        _TtsMode.always => 'always',
+        _TtsMode.never => 'never',
+      },
+    );
   }
 
   void _logout() async {
@@ -412,8 +502,6 @@ class _ConversationScreenState extends State<ConversationScreen> {
     if (!mounted) return;
     setState(() => _sttStatus = _SttStatus.loading);
     try {
-      // whisper_ggml_plus loads the model lazily on first transcription call,
-      // so this just validates the path and transitions the status.
       final ok = await _whisper.isModelCached();
       setState(() => _sttStatus = ok ? _SttStatus.ready : _SttStatus.error);
     } catch (_) {
@@ -452,21 +540,19 @@ class _ConversationScreenState extends State<ConversationScreen> {
   void _cancelAutoSend() {
     _autoSendTimer?.cancel();
     _autoSendTimer = null;
+    _pendingVoiceTurnText = null; // cancelled → next send is text origin
     if (mounted) {
       setState(() => _autoSendRemaining = 0);
-      // Focus the field so the user can edit immediately.
       FocusScope.of(context).requestFocus(_inputFocusNode);
     }
   }
 
-  /// Reminds the user that voice turns auto-send and how to turn it off.
-  /// Shown on every app open / hot-reload, but only while auto-send is on.
   void _showAutoSendHint() {
     if (!_autoSendEnabled) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_autoSendEnabled) return;
       final messenger = ScaffoldMessenger.of(context);
-      messenger.clearSnackBars(); // don't stack across rapid reloads
+      messenger.clearSnackBars();
       messenger.showSnackBar(
         SnackBar(
           content: const Text(
@@ -487,7 +573,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
     });
   }
 
-  // ── Mic / recording actions ───────────────────────────────────────────────
+  // ── Mic / recording ───────────────────────────────────────────────────────
 
   Future<void> _onMicTap() async {
     if (_sttStatus == _SttStatus.ready) {
@@ -505,8 +591,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
   }
 
   void _onPttEnd() {
-    if (_recordMode == _RecordMode.ptt &&
-        _sttStatus == _SttStatus.recording) {
+    if (_recordMode == _RecordMode.ptt && _sttStatus == _SttStatus.recording) {
       _stopAndTranscribe();
     }
   }
@@ -521,10 +606,13 @@ class _ConversationScreenState extends State<ConversationScreen> {
       }
     }
     if (!mounted) return;
+    // Stop any active TTS before recording.
     setState(() {
       _sttStatus = _SttStatus.recording;
       _recordDuration = Duration.zero;
+      _isSpeaking = false;
     });
+    unawaited(_tts.stop());
     _recordTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() => _recordDuration += const Duration(seconds: 1));
     });
@@ -558,9 +646,9 @@ class _ConversationScreenState extends State<ConversationScreen> {
         );
         setState(() => _sttStatus = _SttStatus.ready);
         if (_autoSendEnabled) {
+          _pendingVoiceTurnText = text; // mark as voice origin for TTS decision
           _startAutoSend(text);
         } else {
-          // Manual mode: drop the text in, focused, and let the user send it.
           FocusScope.of(context).requestFocus(_inputFocusNode);
         }
       } else {
@@ -591,10 +679,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF1e1e1e),
-        title: const Text(
-          'Micrófono',
-          style: TextStyle(color: Color(0xFFe0e0e0)),
-        ),
+        title: const Text('Micrófono', style: TextStyle(color: Color(0xFFe0e0e0))),
         content: const Text(
           'El permiso de micrófono fue denegado permanentemente. '
           'Actívalo en Ajustes para usar la entrada por voz.',
@@ -603,20 +688,14 @@ class _ConversationScreenState extends State<ConversationScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text(
-              'Cancelar',
-              style: TextStyle(color: Color(0xFF888888)),
-            ),
+            child: const Text('Cancelar', style: TextStyle(color: Color(0xFF888888))),
           ),
           TextButton(
             onPressed: () {
               Navigator.pop(ctx);
               openAppSettings();
             },
-            child: const Text(
-              'Ajustes',
-              style: TextStyle(color: Color(0xFF4caf50)),
-            ),
+            child: const Text('Ajustes', style: TextStyle(color: Color(0xFF4caf50))),
           ),
         ],
       ),
@@ -639,102 +718,94 @@ class _ConversationScreenState extends State<ConversationScreen> {
               height: 8,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: _connected
-                    ? const Color(0xFF4caf50)
-                    : const Color(0xFF555555),
+                color: _connected ? const Color(0xFF4caf50) : const Color(0xFF555555),
               ),
             ),
             const SizedBox(width: 8),
-            const Text(
-              'Mirach',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-            ),
+            const Text('Mirach', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
           ],
         ),
         actions: [
           TextButton(
             onPressed: _stop,
-            child: const Text(
-              'Stop',
-              style: TextStyle(color: Color(0xFFf44336)),
-            ),
+            child: const Text('Stop', style: TextStyle(color: Color(0xFFf44336))),
           ),
-          PopupMenuButton<String>(
-            color: const Color(0xFF1e1e1e),
-            onSelected: (v) {
-              switch (v) {
-                case 'autosend':
-                  _toggleAutoSend();
-                case 'verbose':
-                  _toggleVerbose();
-                case 'toolcalls':
-                  _toggleToolCalls();
-                case 'toolresults':
-                  _toggleToolResults();
-                case 'forget':
-                  _logout();
-              }
-            },
-            itemBuilder: (_) => [
-              CheckedPopupMenuItem(
-                value: 'autosend',
-                checked: _autoSendEnabled,
-                child: const Text('Envío automático de voz'),
-              ),
-              CheckedPopupMenuItem(
-                value: 'verbose',
-                checked: _verboseOn,
-                child: const Text('Mostrar razonamiento'),
-              ),
-              CheckedPopupMenuItem(
-                value: 'toolcalls',
-                checked: _toolCallsOn,
-                child: const Text('Mostrar llamadas a herramientas'),
-              ),
-              CheckedPopupMenuItem(
-                value: 'toolresults',
-                checked: _toolResultsOn,
-                child: const Text('Mostrar resultados de herramientas'),
-              ),
-              const PopupMenuDivider(),
-              const PopupMenuItem(
-                value: 'forget',
-                child: Text('Olvidar este dispositivo'),
-              ),
-            ],
+          IconButton(
+            icon: const Icon(Icons.more_vert, color: Color(0xFFcccccc)),
+            tooltip: 'Opciones',
+            onPressed: () => setState(() => _settingsOpen = !_settingsOpen),
           ),
         ],
       ),
-      body: Column(
+      body: Stack(
         children: [
-          if (_sttStatus == _SttStatus.downloading ||
-              _sttStatus == _SttStatus.loading)
-            _DownloadBanner(
-              downloading: _sttStatus == _SttStatus.downloading,
-              progress: _downloadProgress,
-            ),
-          Expanded(
-            child: SelectionArea(
-              child: ListView.builder(
-                controller: _scrollCtrl,
-                padding: const EdgeInsets.all(14),
-                itemCount: _items.length,
-                itemBuilder: (ctx, i) => _buildItem(_items[i]),
+          Column(
+            children: [
+              if (_sttStatus == _SttStatus.downloading || _sttStatus == _SttStatus.loading)
+                _DownloadBanner(
+                  downloading: _sttStatus == _SttStatus.downloading,
+                  progress: _downloadProgress,
+                ),
+              Expanded(
+                child: SelectionArea(
+                  child: ListView.builder(
+                    controller: _scrollCtrl,
+                    padding: const EdgeInsets.all(14),
+                    itemCount: _items.length,
+                    itemBuilder: (ctx, i) => _buildItem(_items[i]),
+                  ),
+                ),
+              ),
+              if (_isSpeaking)
+                _SpeakingBanner(
+                  onStop: () {
+                    setState(() => _isSpeaking = false);
+                    unawaited(_tts.stop());
+                  },
+                ),
+              _InputBar(
+                controller: _inputCtrl,
+                focusNode: _inputFocusNode,
+                sending: _sending,
+                sttStatus: _sttStatus,
+                recordDuration: _recordDuration,
+                autoSendRemaining: _autoSendRemaining,
+                onSend: _send,
+                onMicTap: _onMicTap,
+                onPttStart: _onPttStart,
+                onPttEnd: _onPttEnd,
+              ),
+            ],
+          ),
+          // Settings popover overlay
+          if (_settingsOpen) ...[
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => setState(() => _settingsOpen = false),
               ),
             ),
-          ),
-          _InputBar(
-            controller: _inputCtrl,
-            focusNode: _inputFocusNode,
-            sending: _sending,
-            sttStatus: _sttStatus,
-            recordDuration: _recordDuration,
-            autoSendRemaining: _autoSendRemaining,
-            onSend: _send,
-            onMicTap: _onMicTap,
-            onPttStart: _onPttStart,
-            onPttEnd: _onPttEnd,
-          ),
+            Positioned(
+              top: 4,
+              right: 4,
+              child: _SettingsCard(
+                autoSendEnabled: _autoSendEnabled,
+                verboseOn: _verboseOn,
+                toolCallsOn: _toolCallsOn,
+                toolResultsOn: _toolResultsOn,
+                ttsMode: _ttsMode,
+                onToggleAutoSend: _toggleAutoSend,
+                onToggleVerbose: _toggleVerbose,
+                onToggleToolCalls: _toggleToolCalls,
+                onToggleToolResults: _toggleToolResults,
+                onSetTtsMode: _setTtsMode,
+                onForget: () {
+                  setState(() => _settingsOpen = false);
+                  _logout();
+                },
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -774,12 +845,8 @@ class _ConversationScreenState extends State<ConversationScreen> {
           name: item.toolName ?? '',
           args: item.args ?? {},
           toolCallId: item.toolCallId,
-          onConfirm: item.toolCallId != null
-              ? () => _confirmAction(item.toolCallId!, item)
-              : null,
-          onDeny: item.toolCallId != null
-              ? () => _denyAction(item.toolCallId!, item)
-              : null,
+          onConfirm: item.toolCallId != null ? () => _confirmAction(item.toolCallId!, item) : null,
+          onDeny: item.toolCallId != null ? () => _denyAction(item.toolCallId!, item) : null,
         ),
         _ItemKind.errorNotice => _ErrorNotice(message: item.text),
       },
@@ -787,7 +854,208 @@ class _ConversationScreenState extends State<ConversationScreen> {
   }
 }
 
-// ── Bubble / card widgets (unchanged from Slice 1) ────────────────────────────
+// ── Settings popover card ─────────────────────────────────────────────────────
+
+class _SettingsCard extends StatelessWidget {
+  const _SettingsCard({
+    required this.autoSendEnabled,
+    required this.verboseOn,
+    required this.toolCallsOn,
+    required this.toolResultsOn,
+    required this.ttsMode,
+    required this.onToggleAutoSend,
+    required this.onToggleVerbose,
+    required this.onToggleToolCalls,
+    required this.onToggleToolResults,
+    required this.onSetTtsMode,
+    required this.onForget,
+  });
+
+  final bool autoSendEnabled, verboseOn, toolCallsOn, toolResultsOn;
+  final _TtsMode ttsMode;
+  final VoidCallback onToggleAutoSend, onToggleVerbose, onToggleToolCalls, onToggleToolResults;
+  final ValueChanged<_TtsMode> onSetTtsMode;
+  final VoidCallback onForget;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: Container(
+        width: 272,
+        decoration: BoxDecoration(
+          color: const Color(0xFF1e1e1e),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0xFF333333)),
+          boxShadow: const [
+            BoxShadow(color: Colors.black54, blurRadius: 16, offset: Offset(0, 6)),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 12, 16, 4),
+              child: Text(
+                'OPCIONES',
+                style: TextStyle(
+                  color: Color(0xFF666666),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.0,
+                ),
+              ),
+            ),
+            _SettingsSwitch(
+              label: 'Envío automático de voz',
+              value: autoSendEnabled,
+              onChanged: (_) => onToggleAutoSend(),
+            ),
+            _SettingsSwitch(
+              label: 'Mostrar razonamiento',
+              value: verboseOn,
+              onChanged: (_) => onToggleVerbose(),
+            ),
+            _SettingsSwitch(
+              label: 'Mostrar llamadas a herramientas',
+              value: toolCallsOn,
+              onChanged: (_) => onToggleToolCalls(),
+            ),
+            _SettingsSwitch(
+              label: 'Mostrar resultados de herramientas',
+              value: toolResultsOn,
+              onChanged: (_) => onToggleToolResults(),
+            ),
+            const Divider(color: Color(0xFF2a2a2a), height: 1, thickness: 1),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 10, 16, 4),
+              child: Text(
+                'Lectura de respuesta',
+                style: TextStyle(color: Color(0xFF888888), fontSize: 12),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 2, 12, 12),
+              child: Theme(
+                data: ThemeData.dark(useMaterial3: true).copyWith(
+                  colorScheme: const ColorScheme.dark(
+                    primary: Color(0xFF4caf50),
+                    onPrimary: Colors.white,
+                    secondaryContainer: Color(0xFF1e3a1e),
+                    onSecondaryContainer: Color(0xFF4caf50),
+                    surface: Color(0xFF252525),
+                    onSurface: Color(0xFF999999),
+                    outline: Color(0xFF383838),
+                  ),
+                ),
+                child: SegmentedButton<_TtsMode>(
+                  segments: const [
+                    ButtonSegment(
+                      value: _TtsMode.auto,
+                      label: Text('Auto', style: TextStyle(fontSize: 12)),
+                    ),
+                    ButtonSegment(
+                      value: _TtsMode.always,
+                      label: Text('Siempre', style: TextStyle(fontSize: 12)),
+                    ),
+                    ButtonSegment(
+                      value: _TtsMode.never,
+                      label: Text('Nunca', style: TextStyle(fontSize: 12)),
+                    ),
+                  ],
+                  selected: {ttsMode},
+                  onSelectionChanged: (s) => onSetTtsMode(s.first),
+                  showSelectedIcon: false,
+                ),
+              ),
+            ),
+            const Divider(color: Color(0xFF2a2a2a), height: 1, thickness: 1),
+            TextButton(
+              onPressed: onForget,
+              style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                alignment: Alignment.centerLeft,
+                foregroundColor: const Color(0xFFf44336),
+                shape: const RoundedRectangleBorder(
+                  borderRadius: BorderRadius.only(
+                    bottomLeft: Radius.circular(12),
+                    bottomRight: Radius.circular(12),
+                  ),
+                ),
+              ),
+              child: const Text('Olvidar este dispositivo', style: TextStyle(fontSize: 13)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SettingsSwitch extends StatelessWidget {
+  const _SettingsSwitch({
+    required this.label,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final String label;
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return SwitchListTile(
+      dense: true,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
+      title: Text(
+        label,
+        style: const TextStyle(color: Color(0xFFcccccc), fontSize: 13),
+      ),
+      value: value,
+      onChanged: onChanged,
+      activeThumbColor: const Color(0xFF4caf50),
+      activeTrackColor: const Color(0xFF1a3a1a),
+      inactiveThumbColor: const Color(0xFF666666),
+      inactiveTrackColor: const Color(0xFF2a2a2a),
+    );
+  }
+}
+
+// ── Speaking banner ───────────────────────────────────────────────────────────
+
+class _SpeakingBanner extends StatelessWidget {
+  const _SpeakingBanner({required this.onStop});
+  final VoidCallback onStop;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onStop,
+      child: Container(
+        width: double.infinity,
+        color: const Color(0xFF192a19),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        child: const Row(
+          children: [
+            Icon(Icons.volume_up_rounded, color: Color(0xFF4caf50), size: 14),
+            SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Leyendo…  Toca para detener',
+                style: TextStyle(color: Color(0xFF4caf50), fontSize: 12),
+              ),
+            ),
+            Icon(Icons.close_rounded, color: Color(0xFF4caf50), size: 14),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Bubble / card widgets ─────────────────────────────────────────────────────
 
 class _UserBubble extends StatelessWidget {
   const _UserBubble({required this.text, this.queued = false});
@@ -839,11 +1107,7 @@ class _AssistantBubble extends StatelessWidget {
         ),
         child: Text(
           text,
-          style: const TextStyle(
-            fontSize: 14,
-            color: Color(0xFFe0e0e0),
-            height: 1.55,
-          ),
+          style: const TextStyle(fontSize: 14, color: Color(0xFFe0e0e0), height: 1.55),
         ),
       ),
     );
@@ -898,9 +1162,7 @@ class _ReasoningBlockState extends State<_ReasoningBlock> {
         decoration: BoxDecoration(
           color: const Color(0xFF161616),
           border: Border.all(
-            color: widget.live
-                ? const Color(0xFF4caf50)
-                : const Color(0xFF333333),
+            color: widget.live ? const Color(0xFF4caf50) : const Color(0xFF333333),
           ),
           borderRadius: BorderRadius.circular(8),
         ),
@@ -916,10 +1178,7 @@ class _ReasoningBlockState extends State<_ReasoningBlock> {
                     Expanded(
                       child: Text(
                         widget.header,
-                        style: const TextStyle(
-                          color: Color(0xFF999999),
-                          fontSize: 12,
-                        ),
+                        style: const TextStyle(color: Color(0xFF999999), fontSize: 12),
                       ),
                     ),
                     Icon(
@@ -992,8 +1251,6 @@ class _ToolCallCard extends StatelessWidget {
   }
 }
 
-/// Tool output, collapsed by default (the verbose part). Tap the header to
-/// expand. Visibility itself is gated by the 'Mostrar resultados' toggle.
 class _ToolResultCard extends StatefulWidget {
   const _ToolResultCard({required this.result, required this.isError});
   final String result;
@@ -1008,9 +1265,7 @@ class _ToolResultCardState extends State<_ToolResultCard> {
 
   @override
   Widget build(BuildContext context) {
-    final accent = widget.isError
-        ? const Color(0xFFf44336)
-        : const Color(0xFF60c060);
+    final accent = widget.isError ? const Color(0xFFf44336) : const Color(0xFF60c060);
     return Container(
       decoration: BoxDecoration(
         color: const Color(0xFF0f1e10),
@@ -1052,9 +1307,7 @@ class _ToolResultCardState extends State<_ToolResultCard> {
               child: Text(
                 widget.result,
                 style: TextStyle(
-                  color: widget.isError
-                      ? const Color(0xFFff8080)
-                      : const Color(0xFF4a9a4a),
+                  color: widget.isError ? const Color(0xFFff8080) : const Color(0xFF4a9a4a),
                   fontFamily: 'monospace',
                   fontSize: 11,
                 ),
@@ -1189,10 +1442,7 @@ class _ErrorNotice extends StatelessWidget {
 // ── Download progress banner ──────────────────────────────────────────────────
 
 class _DownloadBanner extends StatelessWidget {
-  const _DownloadBanner({
-    required this.downloading,
-    required this.progress,
-  });
+  const _DownloadBanner({required this.downloading, required this.progress});
 
   final bool downloading;
   final double progress;
@@ -1268,7 +1518,6 @@ class _InputBar extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Auto-send countdown chip
           if (autoSendRemaining > 0)
             Container(
               width: double.infinity,
@@ -1280,16 +1529,12 @@ class _InputBar extends StatelessWidget {
                   Expanded(
                     child: Text(
                       'Enviando en ${autoSendRemaining.toStringAsFixed(1)}s · toca el campo para editar',
-                      style: const TextStyle(
-                        color: Color(0xFF666666),
-                        fontSize: 11,
-                      ),
+                      style: const TextStyle(color: Color(0xFF666666), fontSize: 11),
                     ),
                   ),
                 ],
               ),
             ),
-          // Main row
           Padding(
             padding: const EdgeInsets.fromLTRB(8, 8, 14, 14),
             child: Row(
@@ -1310,16 +1555,11 @@ class _InputBar extends StatelessWidget {
                           : TextField(
                               controller: controller,
                               focusNode: focusNode,
-                              style: const TextStyle(
-                                color: Color(0xFFe0e0e0),
-                                fontSize: 14,
-                              ),
+                              style: const TextStyle(color: Color(0xFFe0e0e0), fontSize: 14),
                               onSubmitted: canSend ? (_) => onSend() : null,
                               decoration: InputDecoration(
                                 hintText: 'Type a message…',
-                                hintStyle: const TextStyle(
-                                  color: Color(0xFF555555),
-                                ),
+                                hintStyle: const TextStyle(color: Color(0xFF555555)),
                                 filled: true,
                                 fillColor: const Color(0xFF252525),
                                 contentPadding: const EdgeInsets.symmetric(
@@ -1328,15 +1568,11 @@ class _InputBar extends StatelessWidget {
                                 ),
                                 enabledBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(8),
-                                  borderSide: const BorderSide(
-                                    color: Color(0xFF383838),
-                                  ),
+                                  borderSide: const BorderSide(color: Color(0xFF383838)),
                                 ),
                                 focusedBorder: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(8),
-                                  borderSide: const BorderSide(
-                                    color: Color(0xFF4caf50),
-                                  ),
+                                  borderSide: const BorderSide(color: Color(0xFF4caf50)),
                                 ),
                               ),
                             ),
@@ -1348,13 +1584,8 @@ class _InputBar extends StatelessWidget {
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFF2e7d32),
                       disabledBackgroundColor: const Color(0xFF1a2a1a),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 12,
-                      ),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                     ),
                     child: const Text('Send', style: TextStyle(fontSize: 14)),
                   ),
@@ -1386,10 +1617,7 @@ class _RecordingDisplay extends StatelessWidget {
           const SizedBox(width: 7),
           Text(
             _formatDuration(duration),
-            style: const TextStyle(
-              color: Color(0xFFe0a0a0),
-              fontSize: 14,
-            ),
+            style: const TextStyle(color: Color(0xFFe0a0a0), fontSize: 14),
           ),
           const SizedBox(width: 10),
           const Expanded(
@@ -1422,10 +1650,7 @@ class _TranscribingDisplay extends StatelessWidget {
           SizedBox(
             width: 14,
             height: 14,
-            child: CircularProgressIndicator(
-              strokeWidth: 2,
-              color: Color(0xFF4caf50),
-            ),
+            child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF4caf50)),
           ),
           SizedBox(width: 9),
           Text(
@@ -1438,7 +1663,7 @@ class _TranscribingDisplay extends StatelessWidget {
   }
 }
 
-// ── Mic FAB ───────────────────────────────────────────────────────────────────
+// ── Mic button ────────────────────────────────────────────────────────────────
 
 class _MicButton extends StatefulWidget {
   const _MicButton({
@@ -1457,8 +1682,7 @@ class _MicButton extends StatefulWidget {
   State<_MicButton> createState() => _MicButtonState();
 }
 
-class _MicButtonState extends State<_MicButton>
-    with SingleTickerProviderStateMixin {
+class _MicButtonState extends State<_MicButton> with SingleTickerProviderStateMixin {
   late final AnimationController _pulse;
   late final Animation<double> _scale;
 
@@ -1469,10 +1693,9 @@ class _MicButtonState extends State<_MicButton>
       vsync: this,
       duration: const Duration(milliseconds: 600),
     );
-    _scale = Tween<double>(
-      begin: 1.0,
-      end: 1.22,
-    ).animate(CurvedAnimation(parent: _pulse, curve: Curves.easeInOut));
+    _scale = Tween<double>(begin: 1.0, end: 1.22).animate(
+      CurvedAnimation(parent: _pulse, curve: Curves.easeInOut),
+    );
   }
 
   @override
@@ -1498,13 +1721,12 @@ class _MicButtonState extends State<_MicButton>
     final st = widget.status;
     final isRecording = st == _SttStatus.recording;
     final isReady = st == _SttStatus.ready;
-    final isBusy = st == _SttStatus.loading ||
-        st == _SttStatus.transcribing ||
-        st == _SttStatus.init;
+    final isBusy =
+        st == _SttStatus.loading || st == _SttStatus.transcribing || st == _SttStatus.init;
 
-    Widget icon;
-    Color bg;
-    Color border;
+    final Color bg;
+    final Color border;
+    final Widget icon;
 
     if (isRecording) {
       icon = const Icon(Icons.stop_rounded, color: Colors.white, size: 20);
@@ -1514,10 +1736,7 @@ class _MicButtonState extends State<_MicButton>
       icon = const SizedBox(
         width: 16,
         height: 16,
-        child: CircularProgressIndicator(
-          strokeWidth: 2,
-          color: Color(0xFF4caf50),
-        ),
+        child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF4caf50)),
       );
       bg = const Color(0xFF252525);
       border = const Color(0xFF383838);
@@ -1530,7 +1749,6 @@ class _MicButtonState extends State<_MicButton>
       bg = const Color(0xFF252525);
       border = const Color(0xFF383838);
     } else {
-      // error
       icon = const Icon(Icons.mic_off, color: Color(0xFFf44336), size: 20);
       bg = const Color(0xFF1e1e1e);
       border = const Color(0xFF5a2222);
@@ -1547,9 +1765,7 @@ class _MicButtonState extends State<_MicButton>
       child: Center(child: icon),
     );
 
-    if (isRecording) {
-      btn = ScaleTransition(scale: _scale, child: btn);
-    }
+    if (isRecording) btn = ScaleTransition(scale: _scale, child: btn);
 
     return GestureDetector(
       onTap: widget.onTap,
