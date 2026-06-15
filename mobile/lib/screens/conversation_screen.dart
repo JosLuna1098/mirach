@@ -557,7 +557,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
         SnackBar(
           content: const Text(
             'Tu mensaje de voz se envía solo tras unos segundos. ¿Prefieres '
-            'revisarlo antes? Apaga el envío automático desde el menú ⋮.',
+            'revisarlo antes? Apaga el envío automático desde el menú ⋮',
             style: TextStyle(color: Color(0xFFe8e8e8)),
           ),
           duration: const Duration(seconds: 5),
@@ -879,19 +879,22 @@ class _SettingsCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: Container(
-        width: 272,
-        decoration: BoxDecoration(
+    // Outer Container: border + shadow only (no color).
+    // Inner Material: carries the card color so SwitchListTile ink works correctly.
+    return Container(
+      width: 272,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF333333)),
+        boxShadow: const [
+          BoxShadow(color: Colors.black54, blurRadius: 16, offset: Offset(0, 6)),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: Material(
           color: const Color(0xFF1e1e1e),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: const Color(0xFF333333)),
-          boxShadow: const [
-            BoxShadow(color: Colors.black54, blurRadius: 16, offset: Offset(0, 6)),
-          ],
-        ),
-        child: Column(
+          child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -989,7 +992,7 @@ class _SettingsCard extends StatelessWidget {
           ],
         ),
       ),
-    );
+    ));
   }
 }
 

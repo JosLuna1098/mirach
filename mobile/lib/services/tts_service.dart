@@ -14,9 +14,10 @@ class TtsService {
   bool get isSpeaking => _speaking;
 
   Future<void> init() async {
-    // Prefer es-ES; Android falls back to another es-* voice automatically.
+    // Android setLanguage returns >=0 on success (0=lang, 1=country, 2=variant),
+    // negative on failure (-1=missing data, -2=not supported).
     final result = await _tts.setLanguage('es-ES');
-    if (result != 1) await _tts.setLanguage('es-US');
+    if (result is int && result < 0) await _tts.setLanguage('es-US');
     await _tts.setSpeechRate(0.9);
     await _tts.setVolume(1.0);
     await _tts.setPitch(1.0);
