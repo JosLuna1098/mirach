@@ -81,6 +81,7 @@ class _ConversationScreenState extends State<ConversationScreen>
   late final MirachApi _api;
   late SseClient _sse;
   StreamSubscription<Map<String, dynamic>>? _sub;
+  StreamSubscription<bool>? _connSub;
 
   // ── Background lifecycle ──────────────────────────────────────────────────
   bool _inBackground = false;
@@ -159,6 +160,7 @@ class _ConversationScreenState extends State<ConversationScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _sub?.cancel();
+    _connSub?.cancel();
     _sse.dispose();
     _inputCtrl.dispose();
     _inputFocusNode.removeListener(_onFocusChange);
@@ -251,18 +253,26 @@ class _ConversationScreenState extends State<ConversationScreen>
 
   void _startSse() {
     _sub?.cancel();
+    _connSub?.cancel();
     _sse = SseClient();
     _sse.connect(widget.baseUrl, widget.token);
     _sub = _sse.events.listen(_handleEvent, onError: _onSseError);
+    _connSub = _sse.connectionState.listen(_onConnectionChanged);
     setState(() => _connected = false);
   }
 
   void _resumeSse(int since) {
     _sub?.cancel();
+    _connSub?.cancel();
     _sse = SseClient();
     _sse.reconnectFrom(widget.baseUrl, widget.token, since);
     _sub = _sse.events.listen(_handleEvent, onError: _onSseError);
+    _connSub = _sse.connectionState.listen(_onConnectionChanged);
     if (mounted) setState(() => _connected = false);
+  }
+
+  void _onConnectionChanged(bool connected) {
+    if (mounted) setState(() => _connected = connected);
   }
 
   // ── App lifecycle (background service) ───────────────────────────────────
@@ -289,6 +299,8 @@ class _ConversationScreenState extends State<ConversationScreen>
     // Shut down the UI SSE synchronously before any async gap.
     _sub?.cancel();
     _sub = null;
+    _connSub?.cancel();
+    _connSub = null;
     _sse.dispose();
     _sse = SseClient(); // fresh placeholder — safe for dispose() to call
 
@@ -332,7 +344,6 @@ class _ConversationScreenState extends State<ConversationScreen>
     String? pendingTts;
 
     setState(() {
-      _connected = true;
       final type = ev['type'] as String? ?? '';
 
       if (_activeConfirm != null && type != 'cost') {
@@ -886,26 +897,56 @@ class _ConversationScreenState extends State<ConversationScreen>
       backgroundColor: const Color(0xFF0f0f0f),
       appBar: AppBar(
         backgroundColor: const Color(0xFF1a1a1a),
+        titleSpacing: 12,
         title: Row(
           children: [
             AnimatedContainer(
               duration: const Duration(milliseconds: 300),
-              width: 8,
-              height: 8,
+              width: 9,
+              height: 9,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: _connected ? const Color(0xFF4caf50) : const Color(0xFF555555),
+                color: _connected ? const Color(0xFF4caf50) : const Color(0xFFf44336),
               ),
             ),
-            const SizedBox(width: 8),
-            const Text('Mirach', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+            const SizedBox(width: 9),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'Mirach',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, height: 1.15),
+                ),
+                Text(
+                  _connected ? 'en línea' : 'sin conexión',
+                  style: TextStyle(
+                    fontSize: 11,
+                    height: 1.15,
+                    color: _connected ? const Color(0xFF6abf6a) : const Color(0xFFe57373),
+                  ),
+                ),
+              ],
+            ),
           ],
         ),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.add_comment_outlined, color: Color(0xFF888888)),
-            tooltip: 'Nueva conversación',
-            onPressed: _showNewConversationDialog,
+          Tooltip(
+            message: 'Nueva conversación · descarta el turno actual y la cola',
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 9),
+              child: TextButton.icon(
+                onPressed: _showNewConversationDialog,
+                icon: const Icon(Icons.maps_ugc_outlined, size: 18),
+                label: const Text('Nueva', style: TextStyle(fontSize: 13)),
+                style: TextButton.styleFrom(
+                  foregroundColor: const Color(0xFF9aa0a6),
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+              ),
+            ),
           ),
           IconButton(
             icon: const Icon(Icons.more_vert, color: Color(0xFFcccccc)),
@@ -914,8 +955,9 @@ class _ConversationScreenState extends State<ConversationScreen>
           ),
         ],
       ),
-      body: Stack(
-        children: [
+      body: SafeArea(
+        child: Stack(
+          children: [
           Column(
             children: [
               if (_sttStatus == _SttStatus.downloading || _sttStatus == _SttStatus.loading)
@@ -1017,6 +1059,7 @@ class _ConversationScreenState extends State<ConversationScreen>
             ),
           ],
         ],
+        ),
       ),
     );
   }
@@ -1197,7 +1240,7 @@ class _SettingsCard extends StatelessWidget {
                   ),
                 ),
               ),
-              child: const Text('Olvidar este dispositivo', style: TextStyle(fontSize: 13)),
+              child: const Text('Desconectar de la PC', style: TextStyle(fontSize: 13)),
             ),
           ],
         ),

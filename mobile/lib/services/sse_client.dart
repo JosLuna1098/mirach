@@ -10,13 +10,27 @@ import 'package:http/http.dart' as http;
 class SseClient {
   int _since = 0;
   bool _active = false;
+  bool _connected = false;
   http.Client? _httpClient;
 
   final StreamController<Map<String, dynamic>> _ctrl =
       StreamController.broadcast();
+  final StreamController<bool> _connCtrl = StreamController<bool>.broadcast();
 
   Stream<Map<String, dynamic>> get events => _ctrl.stream;
+
+  /// Emits `true` once the HTTP stream is open, `false` when it drops or errors.
+  /// This is the connection's actual state — independent of whether any events
+  /// have flowed yet (an idle session emits none until the first turn).
+  Stream<bool> get connectionState => _connCtrl.stream;
+  bool get isConnected => _connected;
   int get since => _since;
+
+  void _setConnected(bool value) {
+    if (_connected == value) return;
+    _connected = value;
+    if (!_connCtrl.isClosed) _connCtrl.add(value);
+  }
 
   void connect(String baseUrl, String token) {
     _active = true;
@@ -32,9 +46,11 @@ class SseClient {
 
   void dispose() {
     _active = false;
+    _connected = false;
     _httpClient?.close();
     _httpClient = null;
     _ctrl.close();
+    _connCtrl.close();
   }
 
   void _reconnect(String baseUrl, String token) async {
@@ -49,10 +65,14 @@ class SseClient {
         final streamed = await _httpClient!.send(request);
 
         if (streamed.statusCode == 401) {
+          _setConnected(false);
           _ctrl.addError('invalid_token');
           _active = false;
           return;
         }
+
+        // HTTP stream is open — connection is live before any event arrives.
+        _setConnected(true);
 
         String buf = '';
         await for (final chunk in streamed.stream.transform(utf8.decoder)) {
@@ -81,7 +101,8 @@ class SseClient {
         }
         // stream ended cleanly — reconnect immediately
       } catch (_) {
-        // network error — wait before retry
+        // network error (e.g. PC server down) — mark offline, then retry.
+        _setConnected(false);
       }
 
       if (_active) await Future.delayed(const Duration(seconds: 2));
