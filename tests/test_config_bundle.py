@@ -244,27 +244,8 @@ def test_roundtrip_opencode_json_updated(src_repo, bundle, tmp_path, monkeypatch
     assert any("opencode/skills" in p for p in skills_paths)
 
 
-def test_import_skip_existing_without_force(src_repo, bundle, tmp_path, monkeypatch):
-    """Without --force, existing files are not overwritten."""
-    dest_repo = tmp_path / "dest"
-    dest_repo.mkdir()
-    dest_env = dest_repo / "mirach.env"
-    fake_home = tmp_path / "fakehome"
-
-    # Pre-create system_prompt.md with different content
-    (dest_repo / "system_prompt.md").write_text("# My existing prompt\n")
-
-    monkeypatch.setattr(config, "BASE_DIR", dest_repo)
-    monkeypatch.setattr("mirach.cli._OPENCODE_HOME", fake_home)
-
-    main(["--env-file", str(dest_env), "config", "import", str(bundle), "--yes"])
-
-    # The existing file must not be overwritten
-    assert (dest_repo / "system_prompt.md").read_text() == "# My existing prompt\n"
-
-
-def test_import_force_overwrites(src_repo, bundle, tmp_path, monkeypatch):
-    """--force causes existing files to be overwritten without asking."""
+def test_import_yes_overwrites_existing(src_repo, bundle, tmp_path, monkeypatch):
+    """--yes (yes-to-everything) overwrites existing files."""
     dest_repo = tmp_path / "dest"
     dest_repo.mkdir()
     dest_env = dest_repo / "mirach.env"
@@ -275,9 +256,31 @@ def test_import_force_overwrites(src_repo, bundle, tmp_path, monkeypatch):
     monkeypatch.setattr(config, "BASE_DIR", dest_repo)
     monkeypatch.setattr("mirach.cli._OPENCODE_HOME", fake_home)
 
-    main(["--env-file", str(dest_env), "config", "import", str(bundle), "--force", "--yes"])
+    main(["--env-file", str(dest_env), "config", "import", str(bundle), "--yes"])
 
     assert (dest_repo / "system_prompt.md").read_text() == "# You are Mirach\n"
+
+
+def test_import_interactive_decline_keeps_existing(src_repo, bundle, tmp_path, monkeypatch):
+    """Interactive run: declining the overwrite prompt keeps existing files."""
+    dest_repo = tmp_path / "dest"
+    dest_repo.mkdir()
+    dest_env = dest_repo / "mirach.env"
+    fake_home = tmp_path / "fakehome"
+
+    (dest_repo / "system_prompt.md").write_text("# My existing prompt\n")
+
+    monkeypatch.setattr(config, "BASE_DIR", dest_repo)
+    monkeypatch.setattr("mirach.cli._OPENCODE_HOME", fake_home)
+    # Force interactive code path and decline the overwrite question.
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("mirach.cli._confirm", lambda *a, **k: False)
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "")  # wizard keeps defaults
+
+    main(["--env-file", str(dest_env), "config", "import", str(bundle)])
+
+    # The existing file must not be overwritten when the user declines.
+    assert (dest_repo / "system_prompt.md").read_text() == "# My existing prompt\n"
 
 
 def test_import_missing_bundle(tmp_path, monkeypatch):
@@ -382,4 +385,32 @@ def test_import_policy_safe_writes_env(src_repo, bundle, tmp_path, monkeypatch):
     main(["--env-file", str(dest_env), "config", "import", str(bundle), "--yes"])
 
     env = read_env(dest_env)
-    assert "policy.yaml" in env.get("MIRACH_NATIVE_POLICY", "")
+    assert env.get("MIRACH_NATIVE_POLICY", "").endswith("policy.yaml")
+    assert not env.get("MIRACH_NATIVE_POLICY", "").endswith("policy.dangerous.yaml")
+
+
+def test_import_dangerous_source_lands_on_safe(src_repo, tmp_path, monkeypatch, capsys):
+    """A bundle exported from a dangerous machine still imports as SAFE."""
+    # Build a dangerous-source bundle.
+    env_file = src_repo / "mirach.env"
+    dangerous_path = src_repo / "policy.dangerous.yaml"
+    dangerous_path.write_text("version: 1\n")
+    env_file.write_text(env_file.read_text() + f"MIRACH_NATIVE_POLICY={dangerous_path}\n")
+    out = tmp_path / "bundle.tar.gz"
+    main(["--env-file", str(env_file), "config", "export", "--out", str(out)])
+
+    # Import into a fresh repo.
+    dest_repo = tmp_path / "dest"
+    dest_repo.mkdir()
+    dest_env = dest_repo / "mirach.env"
+    fake_home = tmp_path / "fakehome"
+    monkeypatch.setattr(config, "BASE_DIR", dest_repo)
+    monkeypatch.setattr("mirach.cli._OPENCODE_HOME", fake_home)
+
+    main(["--env-file", str(dest_env), "config", "import", str(out), "--yes"])
+
+    env = read_env(dest_env)
+    assert env.get("MIRACH_NATIVE_POLICY", "").endswith("policy.yaml")
+    assert not env.get("MIRACH_NATIVE_POLICY", "").endswith("policy.dangerous.yaml")
+    # And the user is told how to re-enable it.
+    assert "mirach policy dangerous" in capsys.readouterr().out

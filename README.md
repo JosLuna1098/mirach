@@ -285,9 +285,11 @@ mirach config import mirach-config-<date>.tar.gz
 | `policy.dangerous.example.yaml` | |
 | `manifest.yaml` (portable prefs) | |
 
-**Portable prefs** (applied directly to `mirach.env` on import): locale, Whisper model/lang, backend, native model, opencode provider/model, policy mode.
+**Portable prefs** (applied directly to `mirach.env` on import): locale, Whisper model/lang, backend, native model, opencode provider/model.
 
-**Machine-specific values** (hotkey, voice, mic, binary paths): the import wizard shows the previous machine's value as the default and lets you override. Pass `--yes` to write them as-is without prompting. Use `--force` to overwrite existing files.
+**Machine-specific values** (hotkey, voice, mic, binary paths): the import wizard shows the previous machine's value as the default and lets you override. Pass `--yes` to run non-interactively (keeps the bundle's hints and overwrites existing files without asking).
+
+**Security note:** import always lands on the **safe** policy, even if the source machine ran the dangerous one — you'll see a reminder to run `mirach policy dangerous` if you want it back. The bundle never carries credentials, the Obsidian vault, or `mirach.env` itself.
 
 ---
 

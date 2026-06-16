@@ -670,24 +670,14 @@ def cmd_config_import(args: argparse.Namespace) -> int:
     env_path = Path(args.env_file) if args.env_file else ENV_PATH
     base_dir = config.BASE_DIR
     bundle = Path(args.bundle)
-    force: bool = getattr(args, "force", False)
     yes: bool = getattr(args, "yes", False)
+    # Non-interactive (--yes or no tty) means "yes to everything": overwrite + use
+    # previous values for the machine-specific wizard.
+    non_interactive = yes or not sys.stdin.isatty()
 
     if not bundle.exists():
         print(f"Bundle not found: {bundle}", file=sys.stderr)
         return 1
-
-    def _restore(src: Path, dest: Path, label: str) -> bool:
-        if dest.exists() and not force:
-            if yes or not sys.stdin.isatty():
-                print(f"  Skipped (exists): {label}  (use --force to overwrite)")
-                return False
-            if not _confirm(f"{label} already exists. Overwrite?", default=False):
-                return False
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dest)
-        print(f"  Restored: {label}")
-        return True
 
     with tempfile.TemporaryDirectory(prefix="mirach-import-") as tmpdir:
         tmp = Path(tmpdir)
@@ -723,7 +713,9 @@ def cmd_config_import(args: argparse.Namespace) -> int:
             )
             return 1
 
-        # Top-level content files
+        # ── Collect every (src, dest, label) restore the bundle would perform ──
+        restores: list[tuple[Path, Path, str]] = []
+
         for fname in (
             "system_prompt.md",
             "policy.yaml",
@@ -732,58 +724,62 @@ def cmd_config_import(args: argparse.Namespace) -> int:
         ):
             src = tmp / fname
             if src.exists():
-                _restore(src, base_dir / fname, fname)
+                restores.append((src, base_dir / fname, fname))
 
-        # skills/
         skills_tmp = tmp / "skills"
+        skills_dest = base_dir / "skills"
         if skills_tmp.is_dir():
-            skills_dest = base_dir / "skills"
             for src_file in sorted(skills_tmp.rglob("*")):
                 if src_file.is_file():
                     rel = src_file.relative_to(skills_tmp)
-                    _restore(src_file, skills_dest / rel, f"skills/{rel}")
-            if skills_dest.is_dir():
-                _install_skills_to_opencode(skills_dest)
+                    restores.append((src_file, skills_dest / rel, f"skills/{rel}"))
 
-        # user_scripts/
         us_tmp = tmp / "user_scripts"
         if us_tmp.is_dir():
             us_dest = base_dir / "user_scripts"
             for src_file in sorted(us_tmp.rglob("*")):
                 if src_file.is_file():
                     rel = src_file.relative_to(us_tmp)
-                    _restore(src_file, us_dest / rel, f"user_scripts/{rel}")
+                    restores.append((src_file, us_dest / rel, f"user_scripts/{rel}"))
 
-        # Apply portable prefs
+        # ── One overwrite decision for the whole import ───────────────────────
+        existing = [label for _src, dest, label in restores if dest.exists()]
+        overwrite = True
+        if existing and not non_interactive:
+            print(f"{len(existing)} file(s) already exist and would be overwritten:")
+            for label in existing:
+                print(f"  - {label}")
+            overwrite = _confirm("Overwrite them?", default=False)
+
+        for src, dest, label in restores:
+            if dest.exists() and not overwrite:
+                print(f"  Kept (not overwritten): {label}")
+                continue
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dest)
+            print(f"  Restored: {label}")
+
+        if skills_tmp.is_dir() and skills_dest.is_dir():
+            _install_skills_to_opencode(skills_dest)
+
+        # ── Apply portable prefs ──────────────────────────────────────────────
         portable = dict(manifest.get("portable", {}))
-        policy_mode = portable.pop("policy_mode", None)
+        # policy_mode is NOT auto-applied: importing always lands on the SAFE
+        # policy regardless of the source machine. A dangerous source only
+        # prints a hint on how to re-enable it explicitly.
+        source_policy_mode = portable.pop("policy_mode", None)
         if portable:
             set_env_vars(portable, env_path)
             print(f"  Portable settings applied → {env_path}")
 
-        # Apply policy_mode
-        if policy_mode:
-            safe_path = base_dir / "policy.yaml"
-            dangerous_path = base_dir / "policy.dangerous.yaml"
-            dangerous_template = base_dir / "policy.dangerous.example.yaml"
+        # Always land on the safe policy.
+        set_env_vars({"MIRACH_NATIVE_POLICY": str(base_dir / "policy.yaml")}, env_path)
+        print("  Policy → safe")
+        if source_policy_mode == "dangerous":
+            print("  Note: source machine used the DANGEROUS policy. Imported as SAFE.")
+            print("        Run `mirach policy dangerous` to re-enable it on this machine.")
 
-            if policy_mode == "dangerous":
-                if not dangerous_path.exists() and dangerous_template.exists():
-                    shutil.copyfile(dangerous_template, dangerous_path)
-                    print(f"  Created {dangerous_path.name} from template")
-                if dangerous_path.exists():
-                    set_env_vars({"MIRACH_NATIVE_POLICY": str(dangerous_path)}, env_path)
-                    print("  Policy → dangerous")
-                else:
-                    print(
-                        "  Warning: could not configure dangerous policy (file missing)",
-                        file=sys.stderr,
-                    )
-            else:
-                set_env_vars({"MIRACH_NATIVE_POLICY": str(safe_path)}, env_path)
-                print("  Policy → safe")
-
-        # Machine-specific wizard
+        # ── Machine-specific wizard ───────────────────────────────────────────
         machine_ref = manifest.get("machine_specific_reference", {})
         if machine_ref:
             print("\nMachine-specific settings (press Enter to keep the previous value):")
@@ -930,15 +926,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_import.add_argument("bundle", metavar="BUNDLE", help="Path to the .tar.gz bundle.")
     p_import.add_argument(
-        "--force",
-        action="store_true",
-        help="Overwrite existing files without asking.",
-    )
-    p_import.add_argument(
         "--yes",
         "-y",
         action="store_true",
-        help="Non-interactive: skip prompts, write machine-specific hints as-is.",
+        help="Non-interactive: overwrite existing files and keep the bundle's machine-specific hints.",
     )
     p_import.set_defaults(func=cmd_config_import)
 
