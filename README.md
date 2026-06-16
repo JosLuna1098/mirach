@@ -126,7 +126,8 @@ curl -L -o voices/es_MX-ald-medium.onnx.json \
 
 cp system_prompt.example.md system_prompt.md && $EDITOR system_prompt.md
 cp mirach.service.example ~/.config/systemd/user/mirach.service
-# Edit the service file to set MIRACH_VOICE, MIRACH_WHISPER_DEVICE, etc.
+# Edit paths in the service file (ExecStart, MIRACH_BASE_DIR), then:
+cp mirach.env.example mirach.env && $EDITOR mirach.env  # set MIRACH_VOICE, MIRACH_WHISPER_DEVICE, etc.
 systemctl --user daemon-reload && systemctl --user enable --now mirach
 ```
 
@@ -184,8 +185,25 @@ hyprctl reload  # or your compositor's reload command
 
 ## Configuration
 
-Every knob is an environment variable. Set them in `mirach.service` or your
-shell. Defaults live in [`mirach/config.py`](mirach/config.py).
+Every knob is a `MIRACH_*` environment variable. The recommended way to set
+them is `mirach.env` (in the repo root):
+
+```bash
+cp mirach.env.example mirach.env
+$EDITOR mirach.env
+systemctl --user restart mirach   # pick up the changes
+```
+
+`mirach.env` is gitignored — it stays local to your machine. The installer
+creates it automatically with the values you chose during setup.
+
+**Precedence (highest → lowest):**
+1. Variables already exported in the shell or set via `Environment=` in the systemd unit
+2. `mirach.env`
+3. Built-in defaults in `mirach/config.py`
+
+Defaults live in [`mirach/config.py`](mirach/config.py); all options are
+documented in [`mirach.env.example`](mirach.env.example).
 
 | Variable | Default | Description |
 |---|---|---|
@@ -196,9 +214,9 @@ shell. Defaults live in [`mirach/config.py`](mirach/config.py).
 | `MIRACH_WHISPER_DEVICE` | `cuda` | Set to `cpu` if you have no NVIDIA GPU. |
 | `MIRACH_WHISPER_COMPUTE` | `int8` | Use `float16` for max GPU accuracy. |
 | `MIRACH_WHISPER_BEAM_SIZE` | `3` | 1-5 (lower = faster). |
-| `MIRACH_VOICE` | `daniela.onnx` | Filename inside `voices/`. |
+| `MIRACH_VOICE` | `en_US-lessac-low.onnx` | Filename inside `voices/`. |
 | `MIRACH_VOICE_SPEED` | `1.2` | Piper `length_scale` (>1 = slower). |
-| `MIRACH_MIC` | `fifine` | Substring match against your mic name. |
+| `MIRACH_MIC` | _(system default)_ | Substring match against your mic name. Empty = system default. |
 | `MIRACH_SAMPLE_RATE` | `48000` | Native rate of your mic. |
 | `MIRACH_OPENCODE_MODEL` | `opencode/deepseek-v4-flash-free` | Any OpenCode model id. |
 | `MIRACH_OPENCODE_TIMEOUT` | `120` | Seconds before killing OpenCode (normal queries). |

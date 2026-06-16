@@ -45,12 +45,15 @@ class AudioRecorder:
             log.info("Using PulseAudio host API for device sharing")
 
         devices = sd.query_devices()
-        for _, d in enumerate(devices):
-            if config.MIC_NAME.lower() in d["name"].lower() and d["max_input_channels"] > 0:
-                self._device_spec = d["name"]
-                log.info("Microphone selected: %s", d["name"])
-                return
-        log.warning("Microphone '%s' not found, using system default", config.MIC_NAME)
+        if config.MIC_NAME:
+            for _, d in enumerate(devices):
+                if config.MIC_NAME.lower() in d["name"].lower() and d["max_input_channels"] > 0:
+                    self._device_spec = d["name"]
+                    log.info("Microphone selected: %s", d["name"])
+                    return
+            log.warning("Microphone '%s' not found, using system default", config.MIC_NAME)
+        else:
+            log.info("MIRACH_MIC not set — using system default input device")
         self._device_spec = None
 
     def open(self) -> None:

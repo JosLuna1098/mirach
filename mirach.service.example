@@ -26,40 +26,10 @@ PassEnvironment=WAYLAND_DISPLAY XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS
 # run_daemon.sh self-locates too, so this is belt-and-suspenders.
 # Environment=MIRACH_BASE_DIR=%h/mirach
 
-# --- Optional overrides ---
-# Locale of spoken fillers and visible notifications (default: en).
-# Available out of the box: en, es. Add more in mirach/i18n.py.
-# Environment=MIRACH_LOCALE=es
-
-# Hotkey label shown in notifications (default: Alt+Z). Cosmetic only — the
-# actual key binding lives in your compositor config (set by install.py).
-# Environment=MIRACH_HOTKEY=Alt+Z
-
-# Whisper transcription language (ISO 639-1, default: es). Must match the
-# language you actually speak into the mic.
-# Environment=MIRACH_WHISPER_LANG=en
-
-# DuckDuckGo region for web_search.py (default: wt-wt).
-# Environment=MIRACH_SEARCH_REGION=us-en
-
-# Pipe-separated custom fillers (overrides the localized list entirely).
-# Environment=MIRACH_FILLERS=Just a moment.|Let me think.|Hmm.
-
-# Piper voice filename inside voices/ (set by install.py, default: en_US-lessac-low.onnx).
-# Environment=MIRACH_VOICE=en_US-lessac-low.onnx
-
-# Whisper device: cuda (NVIDIA GPU) or cpu. Set by install.py based on GPU detection.
-# Environment=MIRACH_WHISPER_DEVICE=cpu
-
-# Whisper compute type: float16 (GPU) or int8 (CPU). Match with MIRACH_WHISPER_DEVICE.
-# Environment=MIRACH_WHISPER_COMPUTE=int8
-
-# Whisper model: medium (multilingual, Spanish) or medium.en (English-optimized).
-# Set by install.py based on selected language.
-# Environment=MIRACH_WHISPER_MODEL=large-v3-turbo
-
-# Other overrides: MIRACH_MIC, MIRACH_OPENCODE_MODEL, MIRACH_FILLER_DELAY.
-# See mirach/config.py for the full list.
+# User-tunable config lives in mirach.env (same directory as the repo).
+# install.py rewrites the path below to the actual repo location.
+# The leading '-' means systemd silently ignores the file if it doesn't exist.
+EnvironmentFile=-%h/mirach/mirach.env
 
 [Install]
 WantedBy=graphical-session.target

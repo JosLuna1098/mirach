@@ -26,4 +26,14 @@ export LD_LIBRARY_PATH="$SITE/nvidia/cublas/lib:$SITE/nvidia/cudnn/lib:${LD_LIBR
 # Add the project root to PYTHONPATH so the mirach package is importable
 export PYTHONPATH="$BASE_DIR:${PYTHONPATH:-}"
 
+# Load mirach.env if present. Precedence: shell > mirach.env > config.py defaults.
+# A variable already exported in the calling shell is never overwritten.
+if [[ -f "$BASE_DIR/mirach.env" ]]; then
+    while IFS='=' read -r key val; do
+        [[ "$key" =~ ^[[:space:]]*# || -z "$key" ]] && continue
+        key="${key// /}"
+        [[ -z "${!key:-}" ]] && export "$key=$val"
+    done < "$BASE_DIR/mirach.env"
+fi
+
 exec "$PYBIN" -m mirach

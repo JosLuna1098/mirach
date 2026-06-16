@@ -14,6 +14,7 @@ env/
 
 # Local user configuration (NEVER commit)
 system_prompt.md
+mirach.env
 config.local.*
 .env
 .env.*

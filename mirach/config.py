@@ -52,7 +52,7 @@ OBSIDIAN_VAULT = Path(_env("MIRACH_OBSIDIAN_VAULT", str(Path.home() / "ObsidianV
 OBSIDIAN_CACHE_MAX_AGE = _env_float("MIRACH_OBSIDIAN_CACHE_MAX_AGE", 300.0)  # 5 min
 
 # ── Audio capture ─────────────────────────────────────────────────────
-MIC_NAME = _env("MIRACH_MIC", "fifine")
+MIC_NAME = _env("MIRACH_MIC", "")
 SAMPLE_RATE = _env_int("MIRACH_SAMPLE_RATE", 48000)
 WHISPER_SR = 16000  # Whisper requires 16 kHz input
 RMS_SILENCE_THRESHOLD = _env_float("MIRACH_RMS_SILENCE", 0.005)
@@ -66,7 +66,7 @@ WHISPER_LANG = _env("MIRACH_WHISPER_LANG", "es")
 WHISPER_BEAM_SIZE = _env_int("MIRACH_WHISPER_BEAM_SIZE", 3)  # 1-5 (lower = faster)
 
 # ── TTS (Piper) ───────────────────────────────────────────────────────
-VOICE_NAME = _env("MIRACH_VOICE", "daniela.onnx")
+VOICE_NAME = _env("MIRACH_VOICE", "en_US-lessac-low.onnx")
 VOICE_PATH = VOICES_DIR / VOICE_NAME
 VOICE_SPEED = _env_float("MIRACH_VOICE_SPEED", 1.2)
 
