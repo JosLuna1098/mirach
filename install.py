@@ -2,13 +2,13 @@
 """
 Mirach — interactive setup wizard.
 
-Run from the repo root:
+Normally invoked by bootstrap.sh (the recommended one-liner installer):
+    curl -fsSL https://raw.githubusercontent.com/JosLuna1098/mirach/master/bootstrap.sh | bash
+
+Can also be run directly from the repo root (advanced / dev):
     python3 install.py            # interactive
     python3 install.py --yes      # non-interactive, accept all defaults
     python3 install.py --help
-
-One-liner (Linux / macOS):
-    git clone https://github.com/JosLuna1098/mirach ~/mirach && python3 ~/mirach/install.py
 """
 
 from __future__ import annotations

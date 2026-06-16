@@ -64,24 +64,28 @@ browser as a styled HTML page.
 One command — that's it:
 
 ```bash
-git clone https://github.com/JosLuna1098/mirach ~/mirach && python3 ~/mirach/install.py
+curl -fsSL https://raw.githubusercontent.com/JosLuna1098/mirach/master/bootstrap.sh | bash
 ```
 
-The interactive wizard will:
-- detect your GPU (CUDA) and pre-fill defaults
-- ask for your assistant's name, language, and Obsidian vault path
-- download a Piper voice
-- create a Python virtual env and install all deps
-- check/install OpenCode CLI
-- render your personal `system_prompt.md` from the template
-- install OpenCode skills with your user context
-- create the `user_scripts/` directory for custom voice commands
-- install and start the systemd user service
+This will:
+1. Install system packages (`python3`, `git`, `portaudio`, `alsa-utils`, `libnotify`) via your
+   package manager (`pacman` / `apt` / `dnf`) using `sudo`
+2. Clone the repo to `~/mirach` (override with `MIRACH_DIR=<path>`)
+3. Launch the interactive setup wizard (`install.py`), which:
+   - detects your GPU (CUDA) and pre-fills defaults
+   - asks for your assistant's name, language, and Obsidian vault path
+   - downloads a Piper voice
+   - creates a Python virtual env and installs all deps
+   - checks/installs OpenCode CLI
+   - renders your personal `system_prompt.md` from the template
+   - installs OpenCode skills with your user context
+   - creates the `user_scripts/` directory for custom voice commands
+   - installs and starts the systemd user service
 
 Non-interactive (accept all defaults):
 
 ```bash
-python3 ~/mirach/install.py --yes
+curl -fsSL https://raw.githubusercontent.com/JosLuna1098/mirach/master/bootstrap.sh | bash -s -- --yes
 ```
 
 ### After install
@@ -107,9 +111,23 @@ hyprsunset -t 3500 &
 The daemon parses these at startup. When you say a trigger phrase, the script
 runs and the response is spoken — no LLM call needed.
 
-### Manual install
+### Manual install (advanced / developers)
 
-If you prefer to set things up by hand:
+For developers who already have a clone and want full control. Make sure
+system dependencies are installed first (including **portaudio**):
+
+```bash
+# Arch: sudo pacman -S python git portaudio alsa-utils libnotify
+# Debian/Ubuntu: sudo apt install python3 python3-venv git portaudio19-dev alsa-utils libnotify-bin
+# Fedora: sudo dnf install python3 git portaudio-devel alsa-utils libnotify
+
+git clone https://github.com/JosLuna1098/mirach ~/mirach
+cd ~/mirach
+python3 install.py          # interactive wizard
+# or: python3 install.py --yes   # non-interactive
+```
+
+To set things up entirely by hand:
 
 ```bash
 python3 -m venv venv

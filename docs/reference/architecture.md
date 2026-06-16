@@ -58,8 +58,8 @@ mirach/
 trigger.py                 # Standalone hotkey client (sends "toggle" to socket)
 run_daemon.sh              # Launcher with CUDA 12 library path setup
 pyproject.toml             # Package metadata, dependencies, tool config
-install.py                 # Interactive setup wizard
-install.sh                 # Non-interactive shell installer
+install.py                 # Interactive setup wizard (invoked by bootstrap.sh)
+bootstrap.sh               # curl-served one-liner installer (system deps → clone → wizard)
 system_prompt.example.md   # Template for personalized system prompt
 mirach.service.example     # Template for systemd user service
 
