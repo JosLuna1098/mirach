@@ -262,6 +262,33 @@ make lint           # ruff check .
 make fmt            # ruff check --fix . && ruff format .
 ```
 
+### Export / Import config
+
+Move your Mirach setup to another machine in two commands:
+
+```bash
+# On the source machine — creates mirach-config-<date>.tar.gz in cwd
+mirach config export
+
+# On the new machine — restores content, applies settings, asks machine-specific values
+mirach config import mirach-config-<date>.tar.gz
+```
+
+**What travels in the bundle:**
+
+| Included | Not included |
+|---|---|
+| `system_prompt.md` | `mirach.env` (full file) |
+| `skills/` (all skill dirs) | Obsidian vault |
+| `user_scripts/` | opencode auth / credentials |
+| `policy.yaml` + `policy.dangerous.yaml` | Any `*.key`, `.env`, auth `*.json` |
+| `policy.dangerous.example.yaml` | |
+| `manifest.yaml` (portable prefs) | |
+
+**Portable prefs** (applied directly to `mirach.env` on import): locale, Whisper model/lang, backend, native model, opencode provider/model, policy mode.
+
+**Machine-specific values** (hotkey, voice, mic, binary paths): the import wizard shows the previous machine's value as the default and lets you override. Pass `--yes` to write them as-is without prompting. Use `--force` to overwrite existing files.
+
 ---
 
 ## Architecture

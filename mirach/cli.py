@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import datetime
+import io
 import json
 import os
 import shutil
 import subprocess
 import sys
+import tarfile
+import tempfile
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -181,6 +185,88 @@ def _ollama_has_model(base_url: str, model: str) -> bool:
         return False
     except Exception:
         return False
+
+
+# ── config bundle constants & helpers ─────────────────────────────────────────
+
+_PORTABLE_KEYS = (
+    "MIRACH_LOCALE",
+    "MIRACH_WHISPER_MODEL",
+    "MIRACH_WHISPER_LANG",
+    "MIRACH_BACKEND",
+    "MIRACH_NATIVE_MODEL",
+    "MIRACH_OPENCODE_SERVE_PROVIDER_ID",
+    "MIRACH_OPENCODE_SERVE_MODEL_ID",
+)
+
+_MACHINE_KEYS = (
+    "MIRACH_HOTKEY",
+    "MIRACH_VOICE",
+    "MIRACH_MIC",
+    "MIRACH_OPENCODE_BIN",
+    "MIRACH_NATIVE_BASE_URL",
+    "MIRACH_WHISPER_DEVICE",
+    "MIRACH_WHISPER_COMPUTE",
+)
+
+# Overridable in tests to avoid writing to the real ~/.config/opencode/.
+_OPENCODE_HOME: Path | None = None
+
+
+def _get_opencode_home() -> Path:
+    return _OPENCODE_HOME if _OPENCODE_HOME is not None else Path.home()
+
+
+def _ask(prompt: str, default: str = "", yes: bool = False) -> str:
+    """Prompt for text; return default immediately in non-interactive / --yes mode."""
+    if yes or not sys.stdin.isatty():
+        return default
+    hint = f" [{default}]" if default else ""
+    try:
+        val = input(f"  {prompt}{hint}: ").strip()
+        return val if val else default
+    except (EOFError, KeyboardInterrupt):
+        print()
+        sys.exit(0)
+
+
+def _safe_tar_member(name: str) -> bool:
+    """Return True if the archive member path has no '..' and is not absolute."""
+    if name.startswith("/"):
+        return False
+    return ".." not in Path(name).parts
+
+
+def _install_skills_to_opencode(skills_src: Path) -> None:
+    """Copy skills_src/* to ~/.config/opencode/skills/ and update opencode.json."""
+    home = _get_opencode_home()
+    opencode_skills_dir = home / ".config" / "opencode" / "skills"
+    opencode_config = home / ".config" / "opencode" / "opencode.json"
+
+    opencode_skills_dir.mkdir(parents=True, exist_ok=True)
+    for src_file in sorted(skills_src.rglob("*")):
+        if src_file.is_file():
+            rel = src_file.relative_to(skills_src)
+            dest = opencode_skills_dir / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src_file, dest)
+
+    opencode_config.parent.mkdir(parents=True, exist_ok=True)
+    if opencode_config.exists():
+        try:
+            cfg = json.loads(opencode_config.read_text())
+        except (json.JSONDecodeError, OSError):
+            cfg = {}
+    else:
+        cfg = {"$schema": "https://opencode.ai/config.json"}
+
+    cfg.setdefault("skills", {}).setdefault("paths", [])
+    sp = str(opencode_skills_dir)
+    if sp not in cfg["skills"]["paths"]:
+        cfg["skills"]["paths"].append(sp)
+
+    opencode_config.write_text(json.dumps(cfg, indent=2) + "\n")
+    print(f"  Skills installed → {opencode_skills_dir}")
 
 
 # ── subcommand handlers ────────────────────────────────────────────────────────
@@ -502,6 +588,223 @@ def cmd_policy(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_config_export(args: argparse.Namespace) -> int:
+    try:
+        import yaml
+    except ImportError:
+        print("PyYAML is required for export. Run: pip install pyyaml", file=sys.stderr)
+        return 1
+
+    env_path = Path(args.env_file) if args.env_file else ENV_PATH
+    base_dir = config.BASE_DIR
+
+    out_path = (
+        Path(args.out)
+        if args.out
+        else Path.cwd() / f"mirach-config-{datetime.date.today().isoformat()}.tar.gz"
+    )
+
+    # Build manifest
+    env = read_env(env_path)
+    portable = {k: env[k] for k in _PORTABLE_KEYS if k in env}
+
+    policy_path_str = env.get("MIRACH_NATIVE_POLICY", "")
+    portable["policy_mode"] = _policy_label(Path(policy_path_str)) if policy_path_str else "safe"
+
+    manifest: dict = {
+        "manifest_version": 1,
+        "exported_at": datetime.datetime.now(datetime.UTC).isoformat(),
+        "portable": portable,
+        "machine_specific_reference": {k: env[k] for k in _MACHINE_KEYS if k in env},
+    }
+    manifest_bytes = yaml.dump(manifest, default_flow_style=False, allow_unicode=True).encode()
+
+    with tarfile.open(out_path, "w:gz") as tf:
+        # manifest.yaml (in-memory — not a real file)
+        info = tarfile.TarInfo("manifest.yaml")
+        info.size = len(manifest_bytes)
+        tf.addfile(info, io.BytesIO(manifest_bytes))
+
+        # system_prompt.md
+        sp = base_dir / "system_prompt.md"
+        if sp.exists():
+            tf.add(sp, arcname="system_prompt.md")
+
+        # skills/ (files only, recursive)
+        skills_dir = base_dir / "skills"
+        if skills_dir.is_dir():
+            for item in sorted(skills_dir.rglob("*")):
+                if item.is_file():
+                    tf.add(item, arcname=str(item.relative_to(base_dir)))
+
+        # user_scripts/ (files only, skip .gitkeep)
+        us_dir = base_dir / "user_scripts"
+        if us_dir.is_dir():
+            for item in sorted(us_dir.rglob("*")):
+                if item.is_file() and item.name != ".gitkeep":
+                    tf.add(item, arcname=str(item.relative_to(base_dir)))
+
+        # policy files
+        for fname in (
+            "policy.yaml",
+            "policy.dangerous.yaml",
+            "policy.dangerous.example.yaml",
+        ):
+            p = base_dir / fname
+            if p.exists():
+                tf.add(p, arcname=fname)
+
+    with tarfile.open(out_path, "r:gz") as tf:
+        count = len(tf.getmembers())
+    print(f"Bundle created: {out_path}  ({count} files)")
+    return 0
+
+
+def cmd_config_import(args: argparse.Namespace) -> int:
+    try:
+        import yaml
+    except ImportError:
+        print("PyYAML is required for import. Run: pip install pyyaml", file=sys.stderr)
+        return 1
+
+    env_path = Path(args.env_file) if args.env_file else ENV_PATH
+    base_dir = config.BASE_DIR
+    bundle = Path(args.bundle)
+    force: bool = getattr(args, "force", False)
+    yes: bool = getattr(args, "yes", False)
+
+    if not bundle.exists():
+        print(f"Bundle not found: {bundle}", file=sys.stderr)
+        return 1
+
+    def _restore(src: Path, dest: Path, label: str) -> bool:
+        if dest.exists() and not force:
+            if yes or not sys.stdin.isatty():
+                print(f"  Skipped (exists): {label}  (use --force to overwrite)")
+                return False
+            if not _confirm(f"{label} already exists. Overwrite?", default=False):
+                return False
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dest)
+        print(f"  Restored: {label}")
+        return True
+
+    with tempfile.TemporaryDirectory(prefix="mirach-import-") as tmpdir:
+        tmp = Path(tmpdir)
+        try:
+            with tarfile.open(bundle, "r:gz") as tf:
+                # Path-traversal guard — check every member before extracting.
+                for member in tf.getmembers():
+                    if not _safe_tar_member(member.name):
+                        print(
+                            f"Rejecting bundle: unsafe path in archive: {member.name!r}",
+                            file=sys.stderr,
+                        )
+                        return 1
+                tf.extractall(tmp)
+        except tarfile.TarError as e:
+            print(f"Cannot open bundle: {e}", file=sys.stderr)
+            return 1
+
+        # Load and validate manifest
+        mfile = tmp / "manifest.yaml"
+        if not mfile.exists():
+            print("Bundle is missing manifest.yaml", file=sys.stderr)
+            return 1
+        try:
+            manifest = yaml.safe_load(mfile.read_text()) or {}
+        except yaml.YAMLError as e:
+            print(f"Cannot parse manifest.yaml: {e}", file=sys.stderr)
+            return 1
+        if manifest.get("manifest_version") != 1:
+            print(
+                f"Unsupported manifest version: {manifest.get('manifest_version')}",
+                file=sys.stderr,
+            )
+            return 1
+
+        # Top-level content files
+        for fname in (
+            "system_prompt.md",
+            "policy.yaml",
+            "policy.dangerous.yaml",
+            "policy.dangerous.example.yaml",
+        ):
+            src = tmp / fname
+            if src.exists():
+                _restore(src, base_dir / fname, fname)
+
+        # skills/
+        skills_tmp = tmp / "skills"
+        if skills_tmp.is_dir():
+            skills_dest = base_dir / "skills"
+            for src_file in sorted(skills_tmp.rglob("*")):
+                if src_file.is_file():
+                    rel = src_file.relative_to(skills_tmp)
+                    _restore(src_file, skills_dest / rel, f"skills/{rel}")
+            if skills_dest.is_dir():
+                _install_skills_to_opencode(skills_dest)
+
+        # user_scripts/
+        us_tmp = tmp / "user_scripts"
+        if us_tmp.is_dir():
+            us_dest = base_dir / "user_scripts"
+            for src_file in sorted(us_tmp.rglob("*")):
+                if src_file.is_file():
+                    rel = src_file.relative_to(us_tmp)
+                    _restore(src_file, us_dest / rel, f"user_scripts/{rel}")
+
+        # Apply portable prefs
+        portable = dict(manifest.get("portable", {}))
+        policy_mode = portable.pop("policy_mode", None)
+        if portable:
+            set_env_vars(portable, env_path)
+            print(f"  Portable settings applied → {env_path}")
+
+        # Apply policy_mode
+        if policy_mode:
+            safe_path = base_dir / "policy.yaml"
+            dangerous_path = base_dir / "policy.dangerous.yaml"
+            dangerous_template = base_dir / "policy.dangerous.example.yaml"
+
+            if policy_mode == "dangerous":
+                if not dangerous_path.exists() and dangerous_template.exists():
+                    shutil.copyfile(dangerous_template, dangerous_path)
+                    print(f"  Created {dangerous_path.name} from template")
+                if dangerous_path.exists():
+                    set_env_vars({"MIRACH_NATIVE_POLICY": str(dangerous_path)}, env_path)
+                    print("  Policy → dangerous")
+                else:
+                    print(
+                        "  Warning: could not configure dangerous policy (file missing)",
+                        file=sys.stderr,
+                    )
+            else:
+                set_env_vars({"MIRACH_NATIVE_POLICY": str(safe_path)}, env_path)
+                print("  Policy → safe")
+
+        # Machine-specific wizard
+        machine_ref = manifest.get("machine_specific_reference", {})
+        if machine_ref:
+            print("\nMachine-specific settings (press Enter to keep the previous value):")
+            updates: dict[str, str] = {}
+            for key, hint in machine_ref.items():
+                val = _ask(key, str(hint), yes)
+                if val:
+                    updates[key] = val
+            if updates:
+                set_env_vars(updates, env_path)
+
+    print("\nImport complete.")
+    if _systemd_unit_active():
+        print("Restarting daemon...", end=" ", flush=True)
+        rc = _run_systemctl("restart")
+        print("done" if rc == 0 else f"failed (exit {rc})")
+    else:
+        print("Restart the daemon: mirach start  or  ./run_daemon.sh")
+    return 0
+
+
 # ── entry point ────────────────────────────────────────────────────────────────
 
 
@@ -604,6 +907,42 @@ def main(argv: list[str] | None = None) -> int:
         help="Skip the confirmation prompt when enabling the dangerous policy.",
     )
     p_policy.set_defaults(func=cmd_policy)
+
+    # config ──────────────────────────────────────────────────────────────────
+    p_config = sub.add_parser(
+        "config",
+        help="Export or import the Mirach configuration bundle.",
+    )
+    csub = p_config.add_subparsers(dest="config_cmd", metavar="<action>")
+
+    p_export = csub.add_parser("export", help="Pack config into a portable .tar.gz bundle.")
+    p_export.add_argument(
+        "--out",
+        metavar="PATH",
+        help="Output path (default: mirach-config-<date>.tar.gz in current directory).",
+    )
+    p_export.add_argument("--yes", "-y", action="store_true", help="Non-interactive.")
+    p_export.set_defaults(func=cmd_config_export)
+
+    p_import = csub.add_parser(
+        "import",
+        help="Restore config from a bundle: applies portable prefs, then wizard for machine-specific values.",
+    )
+    p_import.add_argument("bundle", metavar="BUNDLE", help="Path to the .tar.gz bundle.")
+    p_import.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite existing files without asking.",
+    )
+    p_import.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help="Non-interactive: skip prompts, write machine-specific hints as-is.",
+    )
+    p_import.set_defaults(func=cmd_config_import)
+
+    p_config.set_defaults(func=lambda a: p_config.print_help() or 0)
 
     # help ────────────────────────────────────────────────────────────────────
     p_help = sub.add_parser("help", help="Show this help message.")
