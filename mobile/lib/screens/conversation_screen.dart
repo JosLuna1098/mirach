@@ -89,7 +89,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
   bool _connected = false;
   bool _sending = false;
   bool _verboseOn = false;
-  bool _autoSendEnabled = true;
+  bool _autoSendEnabled = false;
   bool _toolCallsOn = true;
   bool _toolResultsOn = true;
 
@@ -169,7 +169,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
     if (!mounted) return;
     setState(() {
       _verboseOn = v == '1';
-      _autoSendEnabled = a != '0';
+      _autoSendEnabled = a == '1'; // default OFF
       _toolCallsOn = c != '0';
       _toolResultsOn = r != '0';
       _ttsMode = switch (t) {
@@ -519,14 +519,14 @@ class _ConversationScreenState extends State<ConversationScreen> {
 
   void _startAutoSend(String text) {
     _autoSendTimer?.cancel();
-    setState(() => _autoSendRemaining = 2.5);
+    setState(() => _autoSendRemaining = 3.0);
     _autoSendTimer = Timer.periodic(const Duration(milliseconds: 100), (t) {
       if (!mounted) {
         t.cancel();
         return;
       }
       setState(() {
-        _autoSendRemaining = (_autoSendRemaining - 0.1).clamp(0.0, 2.5);
+        _autoSendRemaining = (_autoSendRemaining - 0.1).clamp(0.0, 3.0);
         if (_autoSendRemaining <= 0.05) {
           _autoSendRemaining = 0;
           t.cancel();
