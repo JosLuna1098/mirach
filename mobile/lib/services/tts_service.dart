@@ -18,7 +18,7 @@ class TtsService {
     // negative on failure (-1=missing data, -2=not supported).
     final result = await _tts.setLanguage('es-ES');
     if (result is int && result < 0) await _tts.setLanguage('es-US');
-    await _tts.setSpeechRate(0.9);
+    await _tts.setSpeechRate(0.6);
     await _tts.setVolume(1.0);
     await _tts.setPitch(1.0);
 
