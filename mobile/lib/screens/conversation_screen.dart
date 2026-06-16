@@ -151,9 +151,9 @@ class _ConversationScreenState extends State<ConversationScreen>
     _startSse();
     _initStt();
     _initTts();
-    // Request notification permission early so the OS prompt appears on first open,
-    // not at the inconvenient moment the user first backgrounds the app.
-    WidgetsBinding.instance.addPostFrameCallback((_) => _requestNotificationPermission());
+    // Request notification + microphone permission together on connect, so the
+    // user grants both in one flow instead of at different moments.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _requestStartupPermissions());
   }
 
   @override
@@ -201,19 +201,28 @@ class _ConversationScreenState extends State<ConversationScreen>
     });
   }
 
-  // ── Notification permission ───────────────────────────────────────────────
+  // ── Startup permissions ───────────────────────────────────────────────────
 
-  Future<void> _requestNotificationPermission() async {
+  /// Requests notification + microphone permission together on connect, so the
+  /// user grants both in a single flow instead of being prompted at different
+  /// moments. Already-granted or permanently-denied permissions are skipped.
+  Future<void> _requestStartupPermissions() async {
     if (!mounted) return;
-    final status = await Permission.notification.status;
-    if (!status.isGranted && !status.isPermanentlyDenied) {
-      // Suppress the lifecycle handler: the permission dialog pauses the app.
+    final notif = await Permission.notification.status;
+    final mic = await Permission.microphone.status;
+    final pending = <Permission>[
+      if (!notif.isGranted && !notif.isPermanentlyDenied) Permission.notification,
+      if (!mic.isGranted && !mic.isPermanentlyDenied) Permission.microphone,
+    ];
+    if (pending.isNotEmpty) {
+      // The OS dialogs pause the app — suppress the lifecycle handler so the
+      // pause/resume isn't misread as a real background.
       _requestingPermission = true;
-      await Permission.notification.request();
+      await pending.request();
       _requestingPermission = false;
     }
-    // After the user has answered (or if already decided), warn when denied so
-    // they know Mirach can't alert them while they're outside the app.
+    // Warn only about notifications: without it Mirach can't alert the user in
+    // the background. Microphone is re-requestable from the mic button.
     if (!mounted) return;
     if (!await Permission.notification.isGranted) _showNotifPermissionHint();
   }
@@ -786,7 +795,11 @@ class _ConversationScreenState extends State<ConversationScreen>
   Future<void> _startRecording() async {
     var status = await Permission.microphone.status;
     if (!status.isGranted) {
+      // Re-request on mic tap while the permission isn't permanently denied.
+      // The dialog pauses the app, so suppress the lifecycle handler.
+      _requestingPermission = true;
       final result = await Permission.microphone.request();
+      _requestingPermission = false;
       if (!result.isGranted) {
         if (mounted && result.isPermanentlyDenied) _showMicPermissionDialog();
         return;
