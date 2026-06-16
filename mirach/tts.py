@@ -54,7 +54,21 @@ class PiperSpeaker:
         self._aborted = threading.Event()
 
     def load(self) -> None:
-        """Load the Piper voice model from VOICE_PATH. Logs load time and sample rate."""
+        """Load the Piper voice model from VOICE_PATH. Logs load time and sample rate.
+
+        Fails fast with an actionable message if the voice file is missing,
+        instead of letting Piper raise an opaque error deeper in synthesis.
+        """
+        if not config.VOICE_PATH.exists():
+            raise FileNotFoundError(
+                f"Piper voice not found: {config.VOICE_PATH}\n"
+                f"  Fix one of these:\n"
+                f"    • Set MIRACH_VOICE in mirach.env to a voice you already have in "
+                f"{config.VOICES_DIR}/\n"
+                f"    • Place the .onnx (+ matching .onnx.json) there yourself\n"
+                f"    • Re-run 'python3 install.py' to download one\n"
+                f"  Available Piper voices: https://huggingface.co/rhasspy/piper-voices"
+            )
         t0 = time.time()
         self._voice = PiperVoice.load(str(config.VOICE_PATH))
         self._sample_rate = self._voice.config.sample_rate

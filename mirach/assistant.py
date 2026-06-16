@@ -728,7 +728,14 @@ class Assistant:
         notify.open_beep_stream()
         notify.generate_beeps()
         _install_shutdown_hooks(self)
-        self.load()
+        try:
+            self.load()
+        except FileNotFoundError as e:
+            # Missing voice / model is a configuration problem, not a crash.
+            # Surface it clearly in the journal instead of an opaque traceback.
+            log.error("Startup aborted — %s", e)
+            print(f"\n[mirach] Startup failed:\n{e}\n", file=sys.stderr)
+            raise SystemExit(1) from None
         notify.notify(i18n.t("daemon_ready_title"), i18n.t("daemon_ready_body"))
         if config.SERVER_ENABLED:
             from mirach.harness.server import MirachServer
