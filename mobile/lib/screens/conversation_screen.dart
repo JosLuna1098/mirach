@@ -137,13 +137,15 @@ class _ConversationScreenState extends State<ConversationScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _api = MirachApi(baseUrl: widget.baseUrl, token: widget.token);
-    _sse = SseClient();
     _inputCtrl.addListener(() => setState(() {}));
     _inputFocusNode.addListener(_onFocusChange);
     _loadPrefs();
     _startSse();
     _initStt();
     _initTts();
+    // Request notification permission early so the OS prompt appears on first open,
+    // not at the inconvenient moment the user first backgrounds the app.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _requestNotificationPermission());
   }
 
   @override
@@ -195,6 +197,16 @@ class _ConversationScreenState extends State<ConversationScreen>
     _ttsSub = _tts.speakingStream.listen((speaking) {
       if (mounted) setState(() => _isSpeaking = speaking);
     });
+  }
+
+  // ── Notification permission ───────────────────────────────────────────────
+
+  Future<void> _requestNotificationPermission() async {
+    if (!mounted) return;
+    final status = await Permission.notification.status;
+    if (!status.isGranted && !status.isPermanentlyDenied) {
+      await Permission.notification.request();
+    }
   }
 
   // ── SSE ───────────────────────────────────────────────────────────────────
@@ -252,22 +264,24 @@ class _ConversationScreenState extends State<ConversationScreen>
     await FlutterForegroundTask.saveData(key: 'token', value: widget.token);
     await FlutterForegroundTask.saveData(key: 'since', value: _savedSince.toString());
 
-    // Request POST_NOTIFICATIONS permission on Android 13+ (best-effort).
-    if (!await Permission.notification.isGranted) {
-      await Permission.notification.request();
-    }
-
     // Bail if the user came back while we were awaiting above.
     if (!_inBackground) return;
 
-    await FlutterForegroundTask.startService(
-      serviceId: 2601,
-      notificationTitle: 'Mirach',
-      notificationText: 'Toca para volver',
-      notificationButtons: [],
-      notificationInitialRoute: '/',
-      callback: startCallback,
-    );
+    // If notification permission was denied at startup the service still starts;
+    // on Android 13+ the system simply won't display the notification.
+    try {
+      await FlutterForegroundTask.startService(
+        serviceId: 2601,
+        notificationTitle: 'Mirach',
+        notificationText: 'Toca para volver',
+        notificationButtons: [],
+        notificationInitialRoute: '/',
+        callback: startCallback,
+      );
+    } catch (_) {
+      // Notification permission denied or service start blocked — background
+      // presence unavailable but app state is otherwise unaffected.
+    }
   }
 
   Future<void> _onAppResumed() async {
