@@ -24,6 +24,8 @@ import sys
 import urllib.request
 from pathlib import Path
 
+from mirach import langpack
+
 # ── constants ─────────────────────────────────────────────────────────────────
 
 REPO_DIR = Path(__file__).parent.resolve()
@@ -34,22 +36,25 @@ USER_SCRIPTS_DIR = REPO_DIR / "user_scripts"
 OPENCODE_SKILLS_DIR = Path.home() / ".config" / "opencode" / "skills"
 OPENCODE_CONFIG = Path.home() / ".config" / "opencode" / "opencode.json"
 
-PIPER_VOICES: list[tuple[str, str, str]] = [
-    # (display, filename, hf_url)
+PIPER_VOICES: list[tuple[str, str, str, str]] = [
+    # (display, filename, hf_url, lang)
     (
         "Spanish — es_MX-ald-medium (recommended)",
         "es_MX-ald-medium.onnx",
         "https://huggingface.co/rhasspy/piper-voices/resolve/main/es/es_MX/ald/medium/es_MX-ald-medium.onnx",
+        "es",
     ),
     (
         "English — en_US-lessac-medium (recommended)",
         "en_US-lessac-medium.onnx",
         "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx",
+        "en",
     ),
     (
         "English — en_US-lessac-low (smaller/faster)",
         "en_US-lessac-low.onnx",
         "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/low/en_US-lessac-low.onnx",
+        "en",
     ),
 ]
 
@@ -257,14 +262,17 @@ def step_config(detected: dict, total: int) -> dict:
     )
     language_name, language_code = LANGUAGES[lang_idx - 1]
 
-    # Whisper model: multilingual for Spanish, English-optimized for English
-    whisper_model = "medium.en" if language_code == "en" else "medium"
+    # Derive STT model / Whisper language / locale from the shared language pack
+    # so the daemon language, voice and transcription stay consistent.
+    pack = langpack.pack_for(language_code)
 
     return {
         "assistant_name": name,
         "language": language_name,
         "language_code": language_code,
-        "whisper_model": whisper_model,
+        "whisper_model": pack["whisper_model"],
+        "whisper_lang": pack["whisper_lang"],
+        "locale": pack["locale"],
     }
 
 
@@ -523,7 +531,7 @@ def _print_manual(env: str, mods: str, key: str, display: str, trigger_cmd: str)
 
 
 def step_hotkey(total: int) -> dict:
-    banner(12, total, "Keyboard shortcut")
+    banner(13, total, "Keyboard shortcut")
 
     print("  Mirach is activated with a global shortcut. Configure yours (default: Alt+Z).")
     print("  Modifiers: ALT, SUPER, CTRL, SHIFT (combine with spaces or '+').")
@@ -563,16 +571,23 @@ def step_hotkey(total: int) -> dict:
     return {"hotkey_display": display, "hotkey_mods": mods, "hotkey_key": key}
 
 
-def step_voice(total: int) -> tuple[str, str]:
-    banner(7, total, "Piper voice")
+def step_voice(language_code: str, total: int) -> tuple[str, str]:
+    banner(6, total, "Piper voice")
 
     VOICES_DIR.mkdir(exist_ok=True)
 
-    options = [label for label, _, _ in PIPER_VOICES] + ["Specify URL manually"]
-    idx = menu("Choose a voice:", options, default=1)
+    # Show only voices for the chosen language; fall back to all if none match.
+    voices = [v for v in PIPER_VOICES if v[3] == language_code] or list(PIPER_VOICES)
 
-    if idx <= len(PIPER_VOICES):
-        label, voice_name, voice_url = PIPER_VOICES[idx - 1]
+    # Default to the language pack's recommended voice when it's in the list.
+    recommended = langpack.pack_for(language_code)["voice"]
+    default_idx = next((i for i, v in enumerate(voices, 1) if v[1] == recommended), 1)
+
+    options = [v[0] for v in voices] + ["Specify URL manually"]
+    idx = menu("Choose a voice:", options, default=default_idx)
+
+    if idx <= len(voices):
+        _label, voice_name, voice_url, _lang = voices[idx - 1]
     else:
         voice_url = ask("URL of the .onnx file on Hugging Face")
         voice_name = voice_url.split("/")[-1]
@@ -591,7 +606,7 @@ def step_voice(total: int) -> tuple[str, str]:
 
 
 def step_venv(detected: dict, voice_name: str, total: int) -> None:
-    banner(8, total, "Python environment")
+    banner(7, total, "Python environment")
 
     # Create venv if needed
     if not VENV_DIR.exists():
@@ -614,6 +629,56 @@ def step_venv(detected: dict, voice_name: str, total: int) -> None:
         ok("CUDA libs installed (cublas + cudnn)")
     else:
         ok("No GPU — skipping CUDA libs")
+
+
+def _list_input_devices() -> list[str] | None:
+    """List input-device names via the venv's sounddevice. None if unavailable."""
+    pybin = VENV_DIR / "bin" / "python3"
+    if not pybin.exists():
+        return None
+
+    code = (
+        "import sounddevice as sd\n"
+        "for d in sd.query_devices():\n"
+        "    if d['max_input_channels'] > 0:\n"
+        "        print(d['name'])\n"
+    )
+    res = run(str(pybin), "-c", code, capture=True, check=False)
+    if res.returncode != 0:
+        return None
+
+    devices: list[str] = []
+    seen: set[str] = set()
+    for line in res.stdout.splitlines():
+        name = line.strip()
+        if name and name not in seen:
+            seen.add(name)
+            devices.append(name)
+    return devices
+
+
+def step_mic(total: int) -> dict:
+    banner(8, total, "Microphone")
+
+    devices = _list_input_devices()
+    if devices is None:
+        warn("Could not list input devices (sounddevice unavailable) — using system default")
+        return {"mic_name": ""}
+    if not devices:
+        ok("No input devices found — using system default")
+        return {"mic_name": ""}
+
+    # "System default" is first and the default choice (stored as empty string).
+    options = ["System default device"] + devices
+    idx = menu("Which microphone should Mirach use?", options, default=1)
+    if idx == 1:
+        ok("Using system default input device")
+        return {"mic_name": ""}
+
+    # The full device name is itself a valid case-insensitive substring for audio.py.
+    mic_name = devices[idx - 2]
+    ok(f"Microphone: {mic_name}")
+    return {"mic_name": mic_name}
 
 
 def step_opencode(total: int) -> None:
@@ -660,7 +725,7 @@ def step_prompt(tvars: dict, total: int) -> None:
 
 
 def step_service(tvars: dict, total: int) -> None:
-    banner(13, total, "systemd service")
+    banner(14, total, "systemd service")
 
     if platform.system() != "Linux" or not shutil.which("systemctl"):
         warn("systemd not available — start daemon manually with ./run_daemon.sh")
@@ -696,10 +761,12 @@ def step_service(tvars: dict, total: int) -> None:
     # Write mirach.env with installer-chosen values (idempotent — never overwrites).
     env_dest = REPO_DIR / "mirach.env"
     if not env_dest.exists():
-        lang_code = tvars.get("language_code", "en")
+        lang_code = tvars.get("locale") or tvars.get("language_code", "en")
         hotkey = tvars.get("hotkey_display", "Alt+Z")
         whisper_model = tvars.get("whisper_model", "medium")
+        whisper_lang = tvars.get("whisper_lang", "")
         voice_name = tvars.get("voice_name", "")
+        mic_name = tvars.get("mic_name", "")
         gpu = tvars.get("gpu", "cuda")
 
         lines = [
@@ -709,8 +776,12 @@ def step_service(tvars: dict, total: int) -> None:
             f"MIRACH_HOTKEY={hotkey}",
             f"MIRACH_WHISPER_MODEL={whisper_model}",
         ]
+        if whisper_lang:
+            lines.append(f"MIRACH_WHISPER_LANG={whisper_lang}")
         if voice_name:
             lines.append(f"MIRACH_VOICE={voice_name}")
+        if mic_name:
+            lines.append(f"MIRACH_MIC={mic_name}")
         if gpu == "cpu":
             lines.append("MIRACH_WHISPER_DEVICE=cpu")
             lines.append("MIRACH_WHISPER_COMPUTE=int8")
@@ -742,25 +813,179 @@ def step_service(tvars: dict, total: int) -> None:
 # ── user context step ─────────────────────────────────────────────────────────
 
 
-def step_user_context(total: int) -> dict:
+# Small offline lookup so a locale country code becomes a readable name. Anything
+# not listed falls back to the raw code (still a useful, editable hint).
+_COUNTRY_BY_CODE = {
+    "US": "United States",
+    "GB": "United Kingdom",
+    "CA": "Canada",
+    "AU": "Australia",
+    "EC": "Ecuador",
+    "MX": "Mexico",
+    "ES": "Spain",
+    "AR": "Argentina",
+    "CO": "Colombia",
+    "CL": "Chile",
+    "PE": "Peru",
+    "BR": "Brazil",
+    "DE": "Germany",
+    "FR": "France",
+    "IT": "Italy",
+    "PT": "Portugal",
+}
+
+KNOWN_TERMINALS = [
+    "ghostty",
+    "alacritty",
+    "kitty",
+    "foot",
+    "wezterm",
+    "konsole",
+    "gnome-terminal",
+    "xterm",
+]
+
+KNOWN_BROWSERS = [
+    "firefox",
+    "chromium",
+    "google-chrome",
+    "google-chrome-stable",
+    "brave",
+    "brave-browser",
+    "vivaldi",
+    "vivaldi-stable",
+    "microsoft-edge",
+]
+
+_CHROMIUM_FAMILY = ("chrom", "brave", "vivaldi", "edge")
+
+
+def _detect_country() -> str:
+    """Best-effort, network-free country hint from locale env vars or timezone."""
+    for var in ("LC_ALL", "LC_CTYPE", "LANG"):
+        val = os.environ.get(var, "")
+        if "_" in val:
+            code = val.split("_", 1)[1][:2].upper()
+            if code.isalpha():
+                return _COUNTRY_BY_CODE.get(code, code)
+
+    # Timezone city is a weak hint, but better than nothing for editing.
+    with contextlib.suppress(OSError):
+        tz = Path("/etc/timezone").read_text().strip()
+        if "/" in tz:
+            return tz.split("/")[-1].replace("_", " ")
+    with contextlib.suppress(OSError):
+        link = os.readlink("/etc/localtime")
+        if "zoneinfo/" in link:
+            tz = link.split("zoneinfo/")[-1]
+            if "/" in tz:
+                return tz.split("/")[-1].replace("_", " ")
+    return ""
+
+
+def _detect_cpu() -> str:
+    """CPU model name via lscpu, falling back to /proc/cpuinfo."""
+    if shutil.which("lscpu"):
+        res = run("lscpu", capture=True, check=False)
+        if res.returncode == 0:
+            for line in res.stdout.splitlines():
+                if line.lower().startswith("model name:"):
+                    return line.split(":", 1)[1].strip()
+    with contextlib.suppress(OSError):
+        for line in Path("/proc/cpuinfo").read_text().splitlines():
+            if line.lower().startswith("model name"):
+                return line.split(":", 1)[1].strip()
+    return ""
+
+
+def _detect_ram() -> str:
+    """Total RAM as a short string ('31Gi' / '32 GB'), best-effort."""
+    if shutil.which("free"):
+        res = run("free", "-h", capture=True, check=False)
+        if res.returncode == 0:
+            for line in res.stdout.splitlines():
+                if line.lower().startswith("mem:"):
+                    fields = line.split()
+                    if len(fields) >= 2:
+                        return fields[1]
+    with contextlib.suppress(OSError, ValueError, IndexError):
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith("MemTotal:"):
+                gb = int(line.split()[1]) / (1024 * 1024)
+                return f"{gb:.0f} GB"
+    return ""
+
+
+def _detect_hardware(detected: dict) -> str:
+    """Compose 'CPU, GPU, RAM' from autodetected parts (GPU reused from step_detect)."""
+    parts: list[str] = []
+    cpu = _detect_cpu()
+    if cpu:
+        parts.append(cpu)
+    gpu = detected.get("gpu_name", "none")
+    if gpu and gpu != "none":
+        parts.append(gpu)
+    ram = _detect_ram()
+    if ram:
+        parts.append(f"{ram} RAM")
+    return ", ".join(parts)
+
+
+def _detect_terminals() -> list[str]:
+    """Terminals from KNOWN_TERMINALS that are actually installed."""
+    return [t for t in KNOWN_TERMINALS if shutil.which(t)]
+
+
+def _detect_browser() -> str:
+    """The default/installed web browser binary, or '' if none found."""
+    if shutil.which("xdg-settings"):
+        res = run("xdg-settings", "get", "default-web-browser", capture=True, check=False)
+        if res.returncode == 0 and res.stdout.strip():
+            name = res.stdout.strip().removesuffix(".desktop")
+            if shutil.which(name):
+                return name
+            base = name.split("-")[0].split("_")[0]
+            if shutil.which(base):
+                return base
+    return next((b for b in KNOWN_BROWSERS if shutil.which(b)), "")
+
+
+def _browser_app_cmd(browser: str, url: str) -> str:
+    """Build a detached browser launch command for a web app URL."""
+    if not browser:
+        return f"setsid -f xdg-open {url}"
+    if any(tag in browser for tag in _CHROMIUM_FAMILY):
+        return f"setsid -f {browser} --app={url}"
+    return f"setsid -f {browser} {url}"
+
+
+def step_user_context(detected: dict, total: int) -> dict:
     banner(4, total, "User context")
 
-    country = ask("Country", "Ecuador")
+    country = ask("Country", _detect_country())
 
-    hardware = ask(
-        "Hardware specs (CPU, GPU, RAM)",
-        "Intel i5-14600K, NVIDIA RTX 5070 Ti, 32 GB RAM DDR4",
-    )
+    hardware = ask("Hardware specs (CPU, GPU, RAM)", _detect_hardware(detected))
 
-    terminals = ["ghostty", "alacritty", "kitty", "foot", "gnome-terminal"]
-    terminal_idx = menu("Default terminal:", terminals, default=1)
+    terminals = _detect_terminals() or KNOWN_TERMINALS
+    current_term = os.environ.get("TERMINAL", "") or os.environ.get("TERM", "")
+    term_default = next((i for i, t in enumerate(terminals, 1) if t in current_term), 1)
+    terminal_idx = menu("Default terminal:", terminals, default=term_default)
     terminal = terminals[terminal_idx - 1]
 
+    browser = _detect_browser()
+    local_player = next(
+        (
+            p
+            for p in ("clementine", "rhythmbox", "vlc", "audacious", "strawberry")
+            if shutil.which(p)
+        ),
+        "vlc",
+    )
     music_players = [
-        ("YouTube Music (browser)", "uwsm-app -- chromium --app=https://music.youtube.com"),
-        ("Spotify (browser)", "uwsm-app -- chromium --app=https://open.spotify.com"),
-        ("Spotify (native)", "uwsm-app -- spotify"),
-        ("Local files", "uwsm-app -- clementine"),
+        ("YouTube Music (browser)", _browser_app_cmd(browser, "https://music.youtube.com")),
+        ("Spotify (browser)", _browser_app_cmd(browser, "https://open.spotify.com")),
+        ("Spotify (native)", "setsid -f spotify"),
+        (f"Local files ({local_player})", f"setsid -f {local_player}"),
     ]
     music_idx = menu("Music player:", [p[0] for p in music_players], default=1)
     music_player_cmd = music_players[music_idx - 1][1]
@@ -913,7 +1138,7 @@ def step_skills(tvars: dict, selected: list[str], total: int) -> None:
 
 
 def step_user_scripts(total: int) -> None:
-    banner(11, total, "User scripts directory")
+    banner(12, total, "User scripts directory")
 
     USER_SCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
     gitkeep = USER_SCRIPTS_DIR / ".gitkeep"
@@ -977,16 +1202,17 @@ def main() -> None:
         tvars.update(step_detect(TOTAL))
         tvars.update(step_config(tvars, TOTAL))
         tvars.update(step_obsidian(TOTAL))
-        tvars.update(step_user_context(TOTAL))
+        tvars.update(step_user_context(tvars, TOTAL))
         selected = step_capabilities(TOTAL)
-        voice_name, _ = step_voice(TOTAL)
+        voice_name, _ = step_voice(tvars["language_code"], TOTAL)
         tvars["voice_name"] = voice_name
         step_venv(tvars, voice_name, TOTAL)
+        tvars.update(step_mic(TOTAL))
         step_opencode(TOTAL)
         step_skills(tvars, selected, TOTAL)
         step_prompt(tvars, TOTAL)
         step_user_scripts(TOTAL)
-        step_hotkey(TOTAL)
+        tvars.update(step_hotkey(TOTAL))
         step_service(tvars, TOTAL)
         print_summary(tvars)
     except KeyboardInterrupt:
