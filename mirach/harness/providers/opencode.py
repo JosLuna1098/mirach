@@ -91,7 +91,7 @@ class OpenCodeServeBackend:
     def start(self) -> None:
         """Launch opencode serve and wait for it to print its URL on stdout."""
         args = [
-            "opencode",
+            config.OPENCODE_BIN,
             "serve",
             f"--hostname={self._host}",
             f"--port={self._port}",
