@@ -31,8 +31,12 @@ class MirachTaskHandler extends TaskHandler {
     _sub = _sse!.events.listen(
       _handleEvent,
       onError: (e) {
+        // TODO: localize background notifications in v2 — pass mirach_lang via
+        // saveData (already used for credentials) and resolve strings with
+        // lookupAppLocalizations(Locale(code)) from gen-l10n, which works
+        // without a BuildContext.
         if (e.toString().contains('invalid_token')) {
-          _setError('Token inválido — abre la app para reconectar');
+          _setError('Invalid token — reopen the app to reconnect');
         }
       },
     );
@@ -51,15 +55,16 @@ class MirachTaskHandler extends TaskHandler {
         _setWorking();
       case 'awaiting_confirmation':
         _pendingToolCallId = ev['tool_call_id'] as String?;
-        final toolName = ev['name'] as String? ?? 'herramienta';
+        final toolName = ev['name'] as String? ?? 'tool';
         unawaited(
           FlutterForegroundTask.updateService(
             notificationTitle: 'Mirach',
-            notificationText: '⚠ Confirmar: $toolName',
+            // TODO: localize in v2 — see TODO in onStart above.
+            notificationText: '⚠ Confirm: $toolName',
             notificationButtons: [
-              const NotificationButton(id: 'approve', text: 'Aprobar'),
-              const NotificationButton(id: 'deny', text: 'Denegar'),
-              const NotificationButton(id: 'stop', text: 'Parar'),
+              const NotificationButton(id: 'approve', text: 'Approve'),
+              const NotificationButton(id: 'deny', text: 'Deny'),
+              const NotificationButton(id: 'stop', text: 'Stop'),
             ],
           ),
         );
@@ -69,7 +74,7 @@ class MirachTaskHandler extends TaskHandler {
       case 'done':
         _setIdle();
       case 'error':
-        final raw = ev['message'] as String? ?? 'Error desconocido';
+        final raw = ev['message'] as String? ?? 'Unknown error';
         final msg = raw.length > 60 ? '${raw.substring(0, 57)}…' : raw;
         _setError(msg);
     }
@@ -79,9 +84,10 @@ class MirachTaskHandler extends TaskHandler {
     unawaited(
       FlutterForegroundTask.updateService(
         notificationTitle: 'Mirach',
-        notificationText: 'Mirach está trabajando…',
+        // TODO: localize in v2 — see TODO in onStart above.
+        notificationText: 'Working…',
         notificationButtons: [
-          const NotificationButton(id: 'stop', text: 'Parar'),
+          const NotificationButton(id: 'stop', text: 'Stop'),
         ],
       ),
     );
@@ -91,7 +97,8 @@ class MirachTaskHandler extends TaskHandler {
     unawaited(
       FlutterForegroundTask.updateService(
         notificationTitle: 'Mirach',
-        notificationText: 'Toca para volver',
+        // TODO: localize in v2 — see TODO in onStart above.
+        notificationText: 'Tap to return',
         notificationButtons: [],
       ),
     );

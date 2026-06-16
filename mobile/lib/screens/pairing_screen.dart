@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+import '../l10n/app_localizations.dart';
+import '../locale_manager.dart';
 import '../services/mirach_api.dart';
 import 'conversation_screen.dart';
 
@@ -14,7 +16,8 @@ class PairingScreen extends StatefulWidget {
 }
 
 class _PairingScreenState extends State<PairingScreen> {
-  final _hostCtrl = TextEditingController(text: '192.168.1.100:7270');
+  // Dev IP removed: controller starts empty; hint shows xxx.xxx.xxx.xxx:7270.
+  final _hostCtrl = TextEditingController();
   final _codeCtrl = TextEditingController();
   bool _loading = false;
 
@@ -45,9 +48,10 @@ class _PairingScreenState extends State<PairingScreen> {
       );
     } catch (e) {
       if (!mounted) return;
+      final l10n = AppLocalizations.of(context);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Pairing failed: $e'),
+          content: Text(l10n.pairingFailed(e.toString())),
           backgroundColor: Colors.red[900],
         ),
       );
@@ -58,6 +62,7 @@ class _PairingScreenState extends State<PairingScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     return Scaffold(
       backgroundColor: const Color(0xFF0f0f0f),
       body: SafeArea(
@@ -77,22 +82,22 @@ class _PairingScreenState extends State<PairingScreen> {
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 8),
-              const Text(
-                'Enter your PC\'s address and the pairing code\nshown in the daemon logs.',
-                style: TextStyle(color: Color(0xFF888888), fontSize: 14),
+              Text(
+                l10n.pairingSubtitle,
+                style: const TextStyle(color: Color(0xFF888888), fontSize: 14),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 40),
               _DarkField(
                 controller: _hostCtrl,
-                label: 'PC address (host:port)',
-                hint: '192.168.1.100:7270',
+                label: l10n.hostLabel,
+                hint: 'xxx.xxx.xxx.xxx:7270',
                 keyboardType: TextInputType.url,
               ),
               const SizedBox(height: 16),
               _DarkField(
                 controller: _codeCtrl,
-                label: 'Pairing code',
+                label: l10n.codeLabel,
                 hint: 'XXXXXX',
                 textCapitalization: TextCapitalization.characters,
                 onSubmitted: (_) => _pair(),
@@ -116,8 +121,10 @@ class _PairingScreenState extends State<PairingScreen> {
                           color: Colors.white,
                         ),
                       )
-                    : const Text('Connect', style: TextStyle(fontSize: 16)),
+                    : Text(l10n.connectButton, style: const TextStyle(fontSize: 16)),
               ),
+              const SizedBox(height: 24),
+              Center(child: SizedBox(width: 140, child: LangSelector())),
             ],
           ),
         ),

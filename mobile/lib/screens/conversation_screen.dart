@@ -6,6 +6,8 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import '../l10n/app_localizations.dart';
+import '../locale_manager.dart';
 import '../services/audio_recorder.dart';
 import '../services/foreground_task_handler.dart';
 import '../services/mirach_api.dart';
@@ -229,20 +231,20 @@ class _ConversationScreenState extends State<ConversationScreen>
 
   void _showNotifPermissionHint() {
     if (!mounted) return;
+    final l10n = AppLocalizations.of(context);
     final messenger = ScaffoldMessenger.of(context);
     messenger.clearSnackBars();
     messenger.showSnackBar(
       SnackBar(
-        content: const Text(
-          'Sin permiso de notificaciones, Mirach no podrá avisarte cuando '
-          'necesite tu atención mientras estás fuera de la app.',
-          style: TextStyle(color: Color(0xFFe8d0d0)),
+        content: Text(
+          l10n.notifPermHint,
+          style: const TextStyle(color: Color(0xFFe8d0d0)),
         ),
         backgroundColor: const Color(0xFF3a1a1a),
         duration: const Duration(seconds: 8),
         behavior: SnackBarBehavior.floating,
         action: SnackBarAction(
-          label: 'Ajustes',
+          label: l10n.openSettings,
           textColor: const Color(0xFFff8080),
           onPressed: openAppSettings,
         ),
@@ -324,10 +326,12 @@ class _ConversationScreenState extends State<ConversationScreen>
     // Start the service regardless of notification permission — on Android 13+
     // it runs even when the notification can't be shown (it's just suppressed).
     // The denied-permission warning is handled on resume, not here.
+    // NOTE: notification text is intentionally fixed English — the background
+    // isolate has no BuildContext. See TODO in foreground_task_handler.dart.
     await FlutterForegroundTask.startService(
       serviceId: 2601,
       notificationTitle: 'Mirach',
-      notificationText: 'Toca para volver',
+      notificationText: 'Tap to return',
       notificationButtons: [],
       notificationInitialRoute: '/',
       callback: startCallback,
@@ -565,23 +569,24 @@ class _ConversationScreenState extends State<ConversationScreen>
   }
 
   Future<void> _showNewConversationDialog() async {
+    final l10n = AppLocalizations.of(context);
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF1e1e1e),
-        title: const Text('Nueva conversación', style: TextStyle(color: Color(0xFFe0e0e0))),
-        content: const Text(
-          'Se descarta el turno en curso y la cola, y empieza una conversación nueva. ¿Continuar?',
-          style: TextStyle(color: Color(0xFFaaaaaa)),
+        title: Text(l10n.newConvDialogTitle, style: const TextStyle(color: Color(0xFFe0e0e0))),
+        content: Text(
+          l10n.newConvDialogContent,
+          style: const TextStyle(color: Color(0xFFaaaaaa)),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancelar', style: TextStyle(color: Color(0xFF888888))),
+            child: Text(l10n.cancel, style: const TextStyle(color: Color(0xFF888888))),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Empezar', style: TextStyle(color: Color(0xFF4caf50))),
+            child: Text(l10n.start, style: const TextStyle(color: Color(0xFF4caf50))),
           ),
         ],
       ),
@@ -602,23 +607,24 @@ class _ConversationScreenState extends State<ConversationScreen>
   }
 
   Future<void> _showClearQueueDialog() async {
+    final l10n = AppLocalizations.of(context);
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF1e1e1e),
-        title: const Text('Borrar cola', style: TextStyle(color: Color(0xFFe0e0e0))),
-        content: const Text(
-          'Se eliminan los turnos en cola. El turno en curso sigue. ¿Continuar?',
-          style: TextStyle(color: Color(0xFFaaaaaa)),
+        title: Text(l10n.clearQueue, style: const TextStyle(color: Color(0xFFe0e0e0))),
+        content: Text(
+          l10n.clearQueueContent,
+          style: const TextStyle(color: Color(0xFFaaaaaa)),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancelar', style: TextStyle(color: Color(0xFF888888))),
+            child: Text(l10n.cancel, style: const TextStyle(color: Color(0xFF888888))),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Borrar', style: TextStyle(color: Color(0xFFf44336))),
+            child: Text(l10n.clearQueueConfirm, style: const TextStyle(color: Color(0xFFf44336))),
           ),
         ],
       ),
@@ -855,10 +861,10 @@ class _ConversationScreenState extends State<ConversationScreen>
         setState(() => _sttStatus = _SttStatus.ready);
         if (durationAtStop.inSeconds >= 1) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('No se detectó voz'),
-              duration: Duration(seconds: 2),
-              backgroundColor: Color(0xFF333333),
+            SnackBar(
+              content: Text(AppLocalizations.of(context).noVoiceDetected),
+              duration: const Duration(seconds: 2),
+              backgroundColor: const Color(0xFF333333),
             ),
           );
         }
@@ -875,27 +881,27 @@ class _ConversationScreenState extends State<ConversationScreen>
   }
 
   void _showMicPermissionDialog() {
+    final l10n = AppLocalizations.of(context);
     showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF1e1e1e),
-        title: const Text('Micrófono', style: TextStyle(color: Color(0xFFe0e0e0))),
-        content: const Text(
-          'El permiso de micrófono fue denegado permanentemente. '
-          'Actívalo en Ajustes para usar la entrada por voz.',
-          style: TextStyle(color: Color(0xFFaaaaaa)),
+        title: Text(l10n.micPermTitle, style: const TextStyle(color: Color(0xFFe0e0e0))),
+        content: Text(
+          l10n.micPermContent,
+          style: const TextStyle(color: Color(0xFFaaaaaa)),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancelar', style: TextStyle(color: Color(0xFF888888))),
+            child: Text(l10n.cancel, style: const TextStyle(color: Color(0xFF888888))),
           ),
           TextButton(
             onPressed: () {
               Navigator.pop(ctx);
               openAppSettings();
             },
-            child: const Text('Ajustes', style: TextStyle(color: Color(0xFF4caf50))),
+            child: Text(l10n.openSettings, style: const TextStyle(color: Color(0xFF4caf50))),
           ),
         ],
       ),
@@ -906,6 +912,7 @@ class _ConversationScreenState extends State<ConversationScreen>
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     return Scaffold(
       backgroundColor: const Color(0xFF0f0f0f),
       appBar: AppBar(
@@ -932,7 +939,7 @@ class _ConversationScreenState extends State<ConversationScreen>
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, height: 1.15),
                 ),
                 Text(
-                  _connected ? 'en línea' : 'sin conexión',
+                  _connected ? l10n.online : l10n.offline,
                   style: TextStyle(
                     fontSize: 11,
                     height: 1.15,
@@ -945,13 +952,13 @@ class _ConversationScreenState extends State<ConversationScreen>
         ),
         actions: [
           Tooltip(
-            message: 'Nueva conversación · descarta el turno actual y la cola',
+            message: l10n.newConvTooltip,
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: 9),
               child: TextButton.icon(
                 onPressed: _showNewConversationDialog,
                 icon: const Icon(Icons.maps_ugc_outlined, size: 18),
-                label: const Text('Nueva', style: TextStyle(fontSize: 13)),
+                label: Text(l10n.newConvButton, style: const TextStyle(fontSize: 13)),
                 style: TextButton.styleFrom(
                   foregroundColor: const Color(0xFF9aa0a6),
                   padding: const EdgeInsets.symmetric(horizontal: 10),
@@ -963,7 +970,7 @@ class _ConversationScreenState extends State<ConversationScreen>
           ),
           IconButton(
             icon: const Icon(Icons.more_vert, color: Color(0xFFcccccc)),
-            tooltip: 'Opciones',
+            tooltip: l10n.settingsTooltip,
             onPressed: () => setState(() => _settingsOpen = !_settingsOpen),
           ),
         ],
@@ -1009,14 +1016,14 @@ class _ConversationScreenState extends State<ConversationScreen>
                           border: Border.all(color: const Color(0xFF444444)),
                           borderRadius: BorderRadius.circular(16),
                         ),
-                        child: const Row(
+                        child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Icon(Icons.delete_outline, size: 13, color: Color(0xFF888888)),
-                            SizedBox(width: 4),
+                            const Icon(Icons.delete_outline, size: 13, color: Color(0xFF888888)),
+                            const SizedBox(width: 4),
                             Text(
-                              'Borrar cola',
-                              style: TextStyle(color: Color(0xFF888888), fontSize: 12),
+                              l10n.clearQueue,
+                              style: const TextStyle(color: Color(0xFF888888), fontSize: 12),
                             ),
                           ],
                         ),
@@ -1078,6 +1085,7 @@ class _ConversationScreenState extends State<ConversationScreen>
   }
 
   Widget _buildItem(_Item item) {
+    final l10n = AppLocalizations.of(context);
     return Padding(
       key: ObjectKey(item.key),
       padding: const EdgeInsets.only(bottom: 8),
@@ -1087,14 +1095,14 @@ class _ConversationScreenState extends State<ConversationScreen>
         _ItemKind.assistantLive =>
           _verboseOn
               ? _ReasoningBlock(
-                  header: '🧠 trabajando…',
+                  header: l10n.reasoningLive,
                   body: item.text,
                   initiallyExpanded: true,
                   live: true,
                 )
-              : const _ProcessingBubble(),
+              : _ProcessingBubble(label: l10n.processing),
         _ItemKind.assistantVerbose => _ReasoningBlock(
-          header: '🧠 proceso',
+          header: l10n.reasoningDone,
           body: item.text,
           initiallyExpanded: false,
         ),
@@ -1145,6 +1153,7 @@ class _SettingsCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     // Outer Container: border + shadow only (no color).
     // Inner Material: carries the card color so SwitchListTile ink works correctly.
     return Container(
@@ -1164,11 +1173,11 @@ class _SettingsCard extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Padding(
-              padding: EdgeInsets.fromLTRB(16, 12, 16, 4),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
               child: Text(
-                'OPCIONES',
-                style: TextStyle(
+                l10n.settingsHeader,
+                style: const TextStyle(
                   color: Color(0xFF666666),
                   fontSize: 11,
                   fontWeight: FontWeight.w700,
@@ -1177,31 +1186,31 @@ class _SettingsCard extends StatelessWidget {
               ),
             ),
             _SettingsSwitch(
-              label: 'Envío automático de voz',
+              label: l10n.autoSendLabel,
               value: autoSendEnabled,
               onChanged: (_) => onToggleAutoSend(),
             ),
             _SettingsSwitch(
-              label: 'Mostrar razonamiento',
+              label: l10n.showReasoning,
               value: verboseOn,
               onChanged: (_) => onToggleVerbose(),
             ),
             _SettingsSwitch(
-              label: 'Mostrar llamadas a herramientas',
+              label: l10n.showToolCalls,
               value: toolCallsOn,
               onChanged: (_) => onToggleToolCalls(),
             ),
             _SettingsSwitch(
-              label: 'Mostrar resultados de herramientas',
+              label: l10n.showToolResults,
               value: toolResultsOn,
               onChanged: (_) => onToggleToolResults(),
             ),
             const Divider(color: Color(0xFF2a2a2a), height: 1, thickness: 1),
-            const Padding(
-              padding: EdgeInsets.fromLTRB(16, 10, 16, 4),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
               child: Text(
-                'Lectura de respuesta',
-                style: TextStyle(color: Color(0xFF888888), fontSize: 12),
+                l10n.readResponse,
+                style: const TextStyle(color: Color(0xFF888888), fontSize: 12),
               ),
             ),
             Padding(
@@ -1219,18 +1228,18 @@ class _SettingsCard extends StatelessWidget {
                   ),
                 ),
                 child: SegmentedButton<_TtsMode>(
-                  segments: const [
+                  segments: [
                     ButtonSegment(
                       value: _TtsMode.auto,
-                      label: Text('Auto', style: TextStyle(fontSize: 12)),
+                      label: Text(l10n.ttsModeAuto, style: const TextStyle(fontSize: 12)),
                     ),
                     ButtonSegment(
                       value: _TtsMode.always,
-                      label: Text('Siempre', style: TextStyle(fontSize: 12)),
+                      label: Text(l10n.ttsModeAlways, style: const TextStyle(fontSize: 12)),
                     ),
                     ButtonSegment(
                       value: _TtsMode.never,
-                      label: Text('Nunca', style: TextStyle(fontSize: 12)),
+                      label: Text(l10n.ttsModeNever, style: const TextStyle(fontSize: 12)),
                     ),
                   ],
                   selected: {ttsMode},
@@ -1238,6 +1247,18 @@ class _SettingsCard extends StatelessWidget {
                   showSelectedIcon: false,
                 ),
               ),
+            ),
+            const Divider(color: Color(0xFF2a2a2a), height: 1, thickness: 1),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+              child: Text(
+                l10n.languageLabel,
+                style: const TextStyle(color: Color(0xFF888888), fontSize: 12),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 2, 12, 12),
+              child: LangSelector(),
             ),
             const Divider(color: Color(0xFF2a2a2a), height: 1, thickness: 1),
             TextButton(
@@ -1253,7 +1274,7 @@ class _SettingsCard extends StatelessWidget {
                   ),
                 ),
               ),
-              child: const Text('Desconectar de la PC', style: TextStyle(fontSize: 13)),
+              child: Text(l10n.disconnect, style: const TextStyle(fontSize: 13)),
             ),
           ],
         ),
@@ -1306,17 +1327,17 @@ class _SpeakingBanner extends StatelessWidget {
         width: double.infinity,
         color: const Color(0xFF192a19),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        child: const Row(
+        child: Row(
           children: [
-            Icon(Icons.volume_up_rounded, color: Color(0xFF4caf50), size: 14),
-            SizedBox(width: 8),
+            const Icon(Icons.volume_up_rounded, color: Color(0xFF4caf50), size: 14),
+            const SizedBox(width: 8),
             Expanded(
               child: Text(
-                'Leyendo…  Toca para detener',
-                style: TextStyle(color: Color(0xFF4caf50), fontSize: 12),
+                AppLocalizations.of(context).speakingBanner,
+                style: const TextStyle(color: Color(0xFF4caf50), fontSize: 12),
               ),
             ),
-            Icon(Icons.close_rounded, color: Color(0xFF4caf50), size: 14),
+            const Icon(Icons.close_rounded, color: Color(0xFF4caf50), size: 14),
           ],
         ),
       ),
@@ -1384,15 +1405,16 @@ class _AssistantBubble extends StatelessWidget {
 }
 
 class _ProcessingBubble extends StatelessWidget {
-  const _ProcessingBubble();
+  const _ProcessingBubble({required this.label});
+  final String label;
 
   @override
   Widget build(BuildContext context) {
-    return const Align(
+    return Align(
       alignment: Alignment.centerLeft,
       child: Text(
-        'procesando…',
-        style: TextStyle(
+        label,
+        style: const TextStyle(
           color: Color(0xFF888888),
           fontStyle: FontStyle.italic,
           fontSize: 14,
@@ -1534,6 +1556,7 @@ class _ToolResultCardState extends State<_ToolResultCard> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     final accent = widget.isError ? const Color(0xFFf44336) : const Color(0xFF60c060);
     return Container(
       decoration: BoxDecoration(
@@ -1552,7 +1575,7 @@ class _ToolResultCardState extends State<_ToolResultCard> {
                 children: [
                   Expanded(
                     child: Text(
-                      widget.isError ? '✗ error' : '✓ result',
+                      widget.isError ? l10n.toolResultError : l10n.toolResultOk,
                       style: TextStyle(
                         color: accent,
                         fontWeight: FontWeight.bold,
@@ -1605,6 +1628,7 @@ class _ConfirmCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     final disabled = toolCallId == null;
     return Container(
       padding: const EdgeInsets.all(14),
@@ -1617,7 +1641,7 @@ class _ConfirmCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            disabled ? '⚠ Confirm: $name (resuelto)' : '⚠ Confirm: $name',
+            disabled ? l10n.confirmTitleResolved(name) : l10n.confirmTitle(name),
             style: const TextStyle(
               color: Color(0xFFffa030),
               fontWeight: FontWeight.w600,
@@ -1637,14 +1661,14 @@ class _ConfirmCard extends StatelessWidget {
           Row(
             children: [
               _ActionBtn(
-                label: 'Confirm',
+                label: l10n.confirmApprove,
                 color: const Color(0xFF2e7d32),
                 disabled: disabled,
                 onPressed: onConfirm,
               ),
               const SizedBox(width: 8),
               _ActionBtn(
-                label: 'Deny',
+                label: l10n.confirmDeny,
                 color: const Color(0xFFb71c1c),
                 disabled: disabled,
                 onPressed: onDeny,
@@ -1718,6 +1742,7 @@ class _DownloadBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     return Container(
       width: double.infinity,
       color: const Color(0xFF151515),
@@ -1727,8 +1752,8 @@ class _DownloadBanner extends StatelessWidget {
         children: [
           Text(
             downloading
-                ? 'Descargando modelo de voz (${(progress * 100).toStringAsFixed(0)}%)…'
-                : 'Cargando modelo de voz…',
+                ? l10n.downloadingModel((progress * 100).toStringAsFixed(0))
+                : l10n.loadingModel,
             style: const TextStyle(color: Color(0xFF777777), fontSize: 12),
           ),
           const SizedBox(height: 4),
@@ -1784,6 +1809,7 @@ class _InputBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     final canSend =
         controller.text.trim().isNotEmpty && !sending && !_isRecording && !_isTranscribing;
     final showInterrupt = turnActive || hasConfirm || queueNotEmpty;
@@ -1807,7 +1833,7 @@ class _InputBar extends StatelessWidget {
                   const SizedBox(width: 5),
                   Expanded(
                     child: Text(
-                      'Enviando en ${autoSendRemaining.toStringAsFixed(1)}s · toca el campo para editar',
+                      l10n.autoSendCountdown(autoSendRemaining.toStringAsFixed(1)),
                       style: const TextStyle(color: Color(0xFF666666), fontSize: 11),
                     ),
                   ),
@@ -1829,7 +1855,7 @@ class _InputBar extends StatelessWidget {
                         style: const TextStyle(color: Color(0xFFe0e0e0), fontSize: 14),
                         onSubmitted: canSend ? (_) => onSend() : null,
                         decoration: InputDecoration(
-                          hintText: 'Escribe un mensaje…',
+                          hintText: l10n.inputHint,
                           hintStyle: const TextStyle(color: Color(0xFF555555)),
                           filled: true,
                           fillColor: const Color(0xFF252525),
@@ -1852,6 +1878,7 @@ class _InputBar extends StatelessWidget {
               children: [
                 if (showInterrupt)
                   _InterruptButton(
+                    label: l10n.interrupt,
                     highlighted: hasConfirm,
                     enabled: canSend,
                     onPressed: canSend ? onInterrupt : null,
@@ -1873,7 +1900,7 @@ class _InputBar extends StatelessWidget {
                       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                     ),
-                    child: const Text('Enviar', style: TextStyle(fontSize: 14)),
+                    child: Text(l10n.send, style: const TextStyle(fontSize: 14)),
                   ),
                 ],
               ],
@@ -1889,11 +1916,13 @@ class _InputBar extends StatelessWidget {
 
 class _InterruptButton extends StatelessWidget {
   const _InterruptButton({
+    required this.label,
     required this.highlighted,
     required this.enabled,
     required this.onPressed,
   });
 
+  final String label;
   final bool highlighted;
   final bool enabled;
   final VoidCallback? onPressed;
@@ -1922,7 +1951,7 @@ class _InterruptButton extends StatelessWidget {
             Icon(Icons.skip_next_rounded, size: 16, color: effectiveContent),
             const SizedBox(width: 4),
             Text(
-              'Interrumpir',
+              label,
               style: TextStyle(fontSize: 13, color: effectiveContent),
             ),
           ],
@@ -1954,10 +1983,10 @@ class _RecordingDisplay extends StatelessWidget {
             style: const TextStyle(color: Color(0xFFe0a0a0), fontSize: 14),
           ),
           const SizedBox(width: 10),
-          const Expanded(
+          Expanded(
             child: Text(
-              'Grabando…',
-              style: TextStyle(color: Color(0xFF777777), fontSize: 12),
+              AppLocalizations.of(context).recordingLabel,
+              style: const TextStyle(color: Color(0xFF777777), fontSize: 12),
               overflow: TextOverflow.ellipsis,
             ),
           ),
@@ -1979,17 +2008,17 @@ class _TranscribingDisplay extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: const Color(0xFF383838)),
       ),
-      child: const Row(
+      child: Row(
         children: [
-          SizedBox(
+          const SizedBox(
             width: 14,
             height: 14,
             child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF4caf50)),
           ),
-          SizedBox(width: 9),
+          const SizedBox(width: 9),
           Text(
-            'Transcribiendo…',
-            style: TextStyle(color: Color(0xFF888888), fontSize: 14),
+            AppLocalizations.of(context).transcribingLabel,
+            style: const TextStyle(color: Color(0xFF888888), fontSize: 14),
           ),
         ],
       ),

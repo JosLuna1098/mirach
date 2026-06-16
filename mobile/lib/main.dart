@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+import 'l10n/app_localizations.dart';
+import 'locale_manager.dart';
 import 'screens/conversation_screen.dart';
 import 'screens/pairing_screen.dart';
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   FlutterForegroundTask.init(
     androidNotificationOptions: AndroidNotificationOptions(
@@ -22,6 +24,8 @@ void main() {
       allowWakeLock: true,
     ),
   );
+  // Read persisted language before runApp to avoid a locale flash on startup.
+  await initLocale();
   runApp(const MirachApp());
 }
 
@@ -30,22 +34,28 @@ class MirachApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Mirach',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF4caf50),
-          brightness: Brightness.dark,
+    return ValueListenableBuilder<Locale>(
+      valueListenable: localeNotifier,
+      builder: (context, locale, _) => MaterialApp(
+        title: 'Mirach',
+        debugShowCheckedModeBanner: false,
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        locale: locale,
+        theme: ThemeData(
+          colorScheme: ColorScheme.fromSeed(
+            seedColor: const Color(0xFF4caf50),
+            brightness: Brightness.dark,
+          ),
+          scaffoldBackgroundColor: const Color(0xFF0f0f0f),
+          appBarTheme: const AppBarTheme(
+            backgroundColor: Color(0xFF1a1a1a),
+            foregroundColor: Color(0xFFe0e0e0),
+            elevation: 0,
+          ),
         ),
-        scaffoldBackgroundColor: const Color(0xFF0f0f0f),
-        appBarTheme: const AppBarTheme(
-          backgroundColor: Color(0xFF1a1a1a),
-          foregroundColor: Color(0xFFe0e0e0),
-          elevation: 0,
-        ),
+        home: const _StartupRouter(),
       ),
-      home: const _StartupRouter(),
     );
   }
 }

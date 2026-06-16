@@ -1,0 +1,88 @@
+{
+  "@@locale": "en",
+
+  "online": "online",
+  "offline": "offline",
+  "newConvTooltip": "New conversation · discards current turn and queue",
+  "newConvButton": "New",
+  "settingsTooltip": "Settings",
+  "newConvDialogTitle": "New conversation",
+  "newConvDialogContent": "The current turn and queue will be discarded, and a new conversation will start. Continue?",
+  "cancel": "Cancel",
+  "start": "Start",
+  "clearQueue": "Clear queue",
+  "clearQueueContent": "Queued turns will be removed. The current turn continues. Continue?",
+  "clearQueueConfirm": "Clear",
+  "notifPermHint": "Without notification permission, Mirach won't be able to alert you when it needs your attention while the app is in the background.",
+  "openSettings": "Settings",
+  "settingsHeader": "OPTIONS",
+  "autoSendLabel": "Auto-send voice",
+  "showReasoning": "Show reasoning",
+  "showToolCalls": "Show tool calls",
+  "showToolResults": "Show tool results",
+  "readResponse": "Read response",
+  "ttsModeAuto": "Auto",
+  "ttsModeAlways": "Always",
+  "ttsModeNever": "Never",
+  "languageLabel": "Language",
+  "disconnect": "Disconnect from PC",
+  "speakingBanner": "Reading…  Tap to stop",
+  "reasoningLive": "🧠 working…",
+  "reasoningDone": "🧠 process",
+  "processing": "processing…",
+
+  "confirmTitle": "⚠ Confirm: {name}",
+  "@confirmTitle": {
+    "placeholders": {
+      "name": { "type": "String" }
+    }
+  },
+
+  "confirmTitleResolved": "⚠ Confirm: {name} (resolved)",
+  "@confirmTitleResolved": {
+    "placeholders": {
+      "name": { "type": "String" }
+    }
+  },
+
+  "confirmApprove": "Confirm",
+  "confirmDeny": "Deny",
+  "toolResultOk": "✓ result",
+  "toolResultError": "✗ error",
+  "noVoiceDetected": "No voice detected",
+  "micPermTitle": "Microphone",
+  "micPermContent": "Microphone permission was permanently denied. Enable it in Settings to use voice input.",
+  "inputHint": "Type a message…",
+
+  "autoSendCountdown": "Sending in {seconds}s · tap the field to edit",
+  "@autoSendCountdown": {
+    "placeholders": {
+      "seconds": { "type": "String" }
+    }
+  },
+
+  "recordingLabel": "Recording…",
+  "transcribingLabel": "Transcribing…",
+  "send": "Send",
+  "interrupt": "Interrupt",
+
+  "downloadingModel": "Downloading voice model ({percent}%)…",
+  "@downloadingModel": {
+    "placeholders": {
+      "percent": { "type": "String" }
+    }
+  },
+
+  "loadingModel": "Loading voice model…",
+  "pairingSubtitle": "Enter your PC's address and the pairing code\nshown in the daemon logs.",
+  "hostLabel": "PC address (host:port)",
+  "codeLabel": "Pairing code",
+  "connectButton": "Connect",
+
+  "pairingFailed": "Pairing failed: {error}",
+  "@pairingFailed": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  }
+}
