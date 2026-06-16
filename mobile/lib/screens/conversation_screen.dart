@@ -85,7 +85,10 @@ class _ConversationScreenState extends State<ConversationScreen>
   // ── Background lifecycle ──────────────────────────────────────────────────
   bool _inBackground = false;
   int _savedSince = 0;
-  bool _bgServiceFailed = false;
+  // True while the OS permission dialog is up. The dialog backgrounds the app,
+  // which would otherwise be misread as a real focus-loss (false notification
+  // service start + spurious warning on return).
+  bool _requestingPermission = false;
 
   final _inputCtrl = TextEditingController();
   final _inputFocusNode = FocusNode();
@@ -206,8 +209,38 @@ class _ConversationScreenState extends State<ConversationScreen>
     if (!mounted) return;
     final status = await Permission.notification.status;
     if (!status.isGranted && !status.isPermanentlyDenied) {
+      // Suppress the lifecycle handler: the permission dialog pauses the app.
+      _requestingPermission = true;
       await Permission.notification.request();
+      _requestingPermission = false;
     }
+    // After the user has answered (or if already decided), warn when denied so
+    // they know Mirach can't alert them while they're outside the app.
+    if (!mounted) return;
+    if (!await Permission.notification.isGranted) _showNotifPermissionHint();
+  }
+
+  void _showNotifPermissionHint() {
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.clearSnackBars();
+    messenger.showSnackBar(
+      SnackBar(
+        content: const Text(
+          'Sin permiso de notificaciones, Mirach no podrá avisarte cuando '
+          'necesite tu atención mientras estás fuera de la app.',
+          style: TextStyle(color: Color(0xFFe8d0d0)),
+        ),
+        backgroundColor: const Color(0xFF3a1a1a),
+        duration: const Duration(seconds: 8),
+        behavior: SnackBarBehavior.floating,
+        action: SnackBarAction(
+          label: 'Ajustes',
+          textColor: const Color(0xFFff8080),
+          onPressed: openAppSettings,
+        ),
+      ),
+    );
   }
 
   // ── SSE ───────────────────────────────────────────────────────────────────
@@ -240,6 +273,9 @@ class _ConversationScreenState extends State<ConversationScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Ignore the pause/resume the OS permission dialog causes — it's not a real
+    // focus loss, so it must not start the background service or warn.
+    if (_requestingPermission) return;
     if ((state == AppLifecycleState.paused ||
             state == AppLifecycleState.inactive) &&
         !_inBackground) {
@@ -268,57 +304,29 @@ class _ConversationScreenState extends State<ConversationScreen>
     // Bail if the user came back while we were awaiting above.
     if (!_inBackground) return;
 
-    // The notification only shows if POST_NOTIFICATIONS is granted. On Android
-    // 13+ startService() does NOT throw when the permission is missing — the
-    // service runs but the notification is silently suppressed. So detect the
-    // missing permission explicitly rather than relying on an exception.
-    final notifGranted = await Permission.notification.isGranted;
-
-    try {
-      await FlutterForegroundTask.startService(
-        serviceId: 2601,
-        notificationTitle: 'Mirach',
-        notificationText: 'Toca para volver',
-        notificationButtons: [],
-        notificationInitialRoute: '/',
-        callback: startCallback,
-      );
-      // Service started but the notification won't be visible without permission.
-      _bgServiceFailed = !notifGranted;
-    } catch (_) {
-      // Service start blocked entirely — warn on resume.
-      _bgServiceFailed = true;
-    }
+    // Start the service regardless of notification permission — on Android 13+
+    // it runs even when the notification can't be shown (it's just suppressed).
+    // The denied-permission warning is handled on resume, not here.
+    await FlutterForegroundTask.startService(
+      serviceId: 2601,
+      notificationTitle: 'Mirach',
+      notificationText: 'Toca para volver',
+      notificationButtons: [],
+      notificationInitialRoute: '/',
+      callback: startCallback,
+    );
   }
 
   Future<void> _onAppResumed() async {
     await FlutterForegroundTask.stopService();
     if (!mounted) return;
     _resumeSse(_savedSince);
-    if (_bgServiceFailed) {
-      _bgServiceFailed = false;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        final messenger = ScaffoldMessenger.of(context);
-        messenger.clearSnackBars();
-        messenger.showSnackBar(
-          SnackBar(
-            content: const Text(
-              'No pudiste recibir avisos mientras estabas fuera. Activa las '
-              'notificaciones para que Mirach te avise si necesita tu atención.',
-              style: TextStyle(color: Color(0xFFe8d0d0)),
-            ),
-            backgroundColor: const Color(0xFF3a1a1a),
-            duration: const Duration(seconds: 8),
-            behavior: SnackBarBehavior.floating,
-            action: SnackBarAction(
-              label: 'Ajustes',
-              textColor: const Color(0xFFff8080),
-              onPressed: openAppSettings,
-            ),
-          ),
-        );
-      });
+    // If notifications are off, the user just spent time in the background with
+    // no way to be alerted — warn them now that they're back.
+    if (!await Permission.notification.isGranted) {
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _showNotifPermissionHint(),
+      );
     }
   }
 
