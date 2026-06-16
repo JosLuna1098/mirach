@@ -96,6 +96,14 @@ details.think .think-body {
 }
 #btn-verbose.on { background: #1b3a5c; color: #cfe0ff; }
 
+/* ── Language selector ──────────────────────────────────────────────── */
+#lang-select {
+  padding: 4px 6px; font-size: 12px;
+  background: #2a2a2a; color: #888;
+  border: 1px solid #3a3a3a; border-radius: 6px; cursor: pointer;
+}
+#lang-select:focus { outline: none; border-color: #4caf50; }
+
 /* error notice */
 .err-notice {
   align-self: flex-start; max-width: 88%;
@@ -167,20 +175,64 @@ details.think .think-body {
 <div id="header">
   <div id="dot"></div>
   <h1>Mirach</h1>
-  <button id="btn-verbose" title="Mostrar razonamiento del modelo">&#129504;</button>
-  <button id="btn-stop">Stop</button>
+  <button id="btn-verbose">&#129504;</button>
+  <select id="lang-select">
+    <option value="en">EN</option>
+    <option value="es">ES</option>
+  </select>
+  <button id="btn-stop"></button>
 </div>
 
 <div id="transcript"></div>
 
 <div id="input-bar">
-  <input id="msg" type="text" placeholder="Type a message…" autocomplete="off">
-  <button id="btn-send" disabled>Send</button>
+  <input id="msg" type="text" placeholder="" autocomplete="off">
+  <button id="btn-send" disabled></button>
 </div>
 
 <script>
 // ── Config (token injected at serve time) ────────────────────────────
 const TOKEN = "__MIRACH_TOKEN__";
+
+// ── i18n ─────────────────────────────────────────────────────────────
+const STRINGS = {
+  en: {
+    stop:           'Stop',
+    send:           'Send',
+    verboseTitle:   'Show model reasoning',
+    msgPlaceholder: 'Type a message…',
+    thinking:       'working…',
+    processing:     'processing…',
+    process:        'process',
+    toolResultOk:   '✓ result',
+    toolResultErr:  '✗ error',
+    confirmTitle:   '⚠ Confirm: {name}',
+    confirmOk:      'Confirm',
+    confirmDeny:    'Deny',
+  },
+  es: {
+    stop:           'Parar',
+    send:           'Enviar',
+    verboseTitle:   'Mostrar razonamiento del modelo',
+    msgPlaceholder: 'Escribe un mensaje…',
+    thinking:       'trabajando…',
+    processing:     'procesando…',
+    process:        'proceso',
+    toolResultOk:   '✓ resultado',
+    toolResultErr:  '✗ error',
+    confirmTitle:   '⚠ Confirmar: {name}',
+    confirmOk:      'Confirmar',
+    confirmDeny:    'Denegar',
+  },
+};
+
+let lang = localStorage.getItem('mirach_widget_lang') || 'en';
+
+function t(key, vars) {
+  const s = (STRINGS[lang] || STRINGS.en)[key] ?? key;
+  if (!vars) return s;
+  return s.replace(/\\{(\\w+)\\}/g, (_, k) => vars[k] ?? '');
+}
 
 // ── State ────────────────────────────────────────────────────────────
 let since      = 0;     // next event index for ?since= on reconnect
@@ -199,6 +251,7 @@ const msgInput   = document.getElementById('msg');
 const btnSend    = document.getElementById('btn-send');
 const btnStop    = document.getElementById('btn-stop');
 const btnVerbose = document.getElementById('btn-verbose');
+const langSelect = document.getElementById('lang-select');
 
 // ── Utilities ────────────────────────────────────────────────────────
 const esc = s => String(s)
@@ -265,11 +318,11 @@ function onTextDelta(ev) {
       liveBox = document.createElement('details');
       liveBox.className = 'think';
       liveBox.open = true;
-      liveBox.innerHTML = '<summary>&#129504; trabajando…</summary><div class="think-body"></div>';
+      liveBox.innerHTML = `<summary>&#129504; ${t('thinking')}</summary><div class="think-body"></div>`;
     } else {
       liveBox = document.createElement('div');
       liveBox.className = 'msg processing';
-      liveBox.textContent = 'procesando…';
+      liveBox.textContent = t('processing');
     }
     transcript.appendChild(liveBox);
   }
@@ -290,7 +343,7 @@ function onDone(ev) {
   if (verboseOn && hadVerbose) {
     const d = document.createElement('details');
     d.className = 'think';
-    d.innerHTML = '<summary>&#129504; proceso</summary><div class="think-body"></div>';
+    d.innerHTML = `<summary>&#129504; ${t('process')}</summary><div class="think-body"></div>`;
     d.querySelector('.think-body').textContent = streamed;
     transcript.appendChild(d);
   }
@@ -319,7 +372,7 @@ function onToolCall(ev) {
 function onToolResult(ev) {
   const d = document.createElement('div');
   d.className = 'tool-result';
-  const label = ev.error ? '✗ error' : '✓ result';
+  const label = ev.error ? t('toolResultErr') : t('toolResultOk');
   d.innerHTML = `<div class="tr-label">${label}</div><div class="tr-body">${esc(ev.result)}</div>`;
   transcript.appendChild(d);
   scrollDown();
@@ -330,11 +383,11 @@ function onAwaitingConfirmation(ev) {
   const d = document.createElement('div');
   d.className = 'confirm-block';
   d.innerHTML = `
-    <div class="cb-title">⚠ Confirm: ${esc(ev.name)}</div>
+    <div class="cb-title">${t('confirmTitle', {name: esc(ev.name)})}</div>
     <div class="cb-args">${esc(args)}</div>
     <div class="cb-btns">
-      <button class="btn-ok">Confirm</button>
-      <button class="btn-no">Deny</button>
+      <button class="btn-ok">${t('confirmOk')}</button>
+      <button class="btn-no">${t('confirmDeny')}</button>
     </div>`;
   const freeze = () => d.querySelectorAll('button').forEach(b => { b.disabled = true; });
   d.querySelector('.btn-ok').addEventListener('click', () => {
@@ -422,6 +475,21 @@ btnVerbose.addEventListener('click', () => {
   renderVerboseBtn();
 });
 renderVerboseBtn();
+
+// ── Language selector ────────────────────────────────────────────────
+function applyLang() {
+  btnStop.textContent  = t('stop');
+  btnSend.textContent  = t('send');
+  btnVerbose.title     = t('verboseTitle');
+  msgInput.placeholder = t('msgPlaceholder');
+  langSelect.value     = lang;
+}
+langSelect.addEventListener('change', () => {
+  lang = langSelect.value;
+  localStorage.setItem('mirach_widget_lang', lang);
+  applyLang();
+});
+applyLang();
 </script>
 
 </body>
