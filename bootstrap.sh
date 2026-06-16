@@ -58,6 +58,24 @@ It uses sudo only for system packages — re-run as your normal user:
   bash bootstrap.sh"
 fi
 
+# ── local-checkout guard ──────────────────────────────────────────────────────
+# bootstrap.sh is meant for the curl one-liner on a fresh machine. If someone
+# runs it from inside an already-cloned checkout (e.g. `bash bootstrap.sh`),
+# don't clone a second copy — point them at the wizard and bail.
+# (Via curl|bash, BASH_SOURCE[0] is "bash", so this never triggers.)
+SCRIPT_PATH="${BASH_SOURCE[0]:-}"
+if [[ "$(basename -- "$SCRIPT_PATH" 2>/dev/null || true)" == "bootstrap.sh" && -f "$SCRIPT_PATH" ]]; then
+    SCRIPT_DIR="$(cd "$(dirname -- "$SCRIPT_PATH")" && pwd)"
+    if [[ -d "$SCRIPT_DIR/.git" && -f "$SCRIPT_DIR/install.py" ]]; then
+        warn "You're running bootstrap.sh from inside an existing Mirach checkout:"
+        warn "  $SCRIPT_DIR"
+        warn "bootstrap.sh is only for the fresh curl one-liner install."
+        warn "You already have the repo — run the wizard directly instead:"
+        printf '\n    cd %s && python3 install.py\n\n' "$SCRIPT_DIR"
+        exit 1
+    fi
+fi
+
 # ── 1. system packages ────────────────────────────────────────────────────────
 detect_pm() {
     if   command -v pacman  >/dev/null 2>&1; then echo pacman
@@ -102,7 +120,8 @@ install_system_deps
 # ── 2. clone / update repo ────────────────────────────────────────────────────
 if [[ -e "$MIRACH_DIR" ]]; then
     if [[ -d "$MIRACH_DIR/.git" ]]; then
-        log "Repo already exists at $MIRACH_DIR — pulling latest"
+        ok "You already have Mirach installed at $MIRACH_DIR"
+        log "Updating to the latest version (git pull --ff-only)"
         git -C "$MIRACH_DIR" pull --ff-only
         ok "Repo updated"
     else
