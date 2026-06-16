@@ -90,7 +90,7 @@ class PolicyEngine:
         shell = self._policy.defaults.shell
         # deny patterns are checked first (highest priority)
         for pattern in shell.deny:
-            if command.startswith(pattern) or pattern in command:
+            if _deny_hit(command, pattern):
                 return Decision.DENY
         if shell.mode == "confirm_all":
             return Decision.CONFIRM
@@ -165,6 +165,42 @@ class PolicyEngine:
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
+
+# Real shell token separators — a deny pattern's match must START on one of
+# these (or the string edge) so "dd" doesn't fire inside "git add".
+_HARD_SEP = frozenset(" \t\n;&|")
+# Characters that also END a command token or path target — used for the
+# after-match check so "rm -rf /" denies "/" / "/*" but not "/tmp/scratch",
+# and "mkfs" still denies "mkfs.ext4".
+_AFTER_BOUNDARY = _HARD_SEP | frozenset("*?.<>")
+
+
+def _deny_hit(command: str, pattern: str) -> bool:
+    """True if `pattern` occurs in `command` bounded by token/path edges.
+
+    The match must start on a token separator (or the string edge) and end on a
+    token/path boundary (or the string edge). A pattern that itself ends in a
+    hard separator (e.g. "dd ") is already bounded after, so no extra check is
+    needed there. This replaces a naive ``startswith`` / ``in`` test that denied
+    any absolute-path deletion (``rm -rf /anything``) because the target began
+    with the catastrophic ``rm -rf /`` prefix.
+    """
+    if not pattern:
+        return False
+    trailing_boundary = pattern[-1] in _HARD_SEP
+    start = 0
+    while True:
+        idx = command.find(pattern, start)
+        if idx < 0:
+            return False
+        before_ok = idx == 0 or command[idx - 1] in _HARD_SEP
+        end = idx + len(pattern)
+        after_ok = (
+            trailing_boundary or end == len(command) or command[end] in _AFTER_BOUNDARY
+        )
+        if before_ok and after_ok:
+            return True
+        start = idx + 1
 
 
 def _resolve(path: Path) -> Path:

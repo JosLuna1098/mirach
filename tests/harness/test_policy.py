@@ -81,6 +81,45 @@ class TestShellPolicy:
         e = PolicyEngine()
         assert e.check_shell("ls") == Decision.ALLOW  # exact, no trailing space
 
+    # ── deny-pattern boundary matching ────────────────────────────────────────
+    # Regression: "rm -rf /" must deny only root deletion, not every absolute
+    # path. "rm -rf /tmp/x" used to be denied because it begins with "rm -rf /".
+
+    def test_rm_rf_subdir_is_not_denied(self):
+        """rm -rf /tmp/scratch → CONFIRM (rm), not DENY (rm -rf /)."""
+        e = PolicyEngine()
+        assert e.check_shell("rm -rf /tmp/mirage") == Decision.CONFIRM
+
+    def test_rm_rf_root_still_denied(self):
+        e = PolicyEngine()
+        assert e.check_shell("rm -rf /") == Decision.DENY
+
+    def test_rm_rf_root_glob_denied(self):
+        e = PolicyEngine()
+        assert e.check_shell("rm -rf /*") == Decision.DENY
+
+    def test_deny_pattern_matches_after_separator(self):
+        """A deny pattern fires inside a compound command."""
+        e = PolicyEngine()
+        assert e.check_shell("echo hi && rm -rf /") == Decision.DENY
+
+    def test_dotfile_subdir_deletion_is_not_denied(self):
+        """rm -rf ~/.config/foo → CONFIRM, not DENY (~/. is home itself)."""
+        e = PolicyEngine()
+        assert e.check_shell("rm -rf ~/.config/foo") == Decision.CONFIRM
+
+    def test_mkfs_variant_still_denied(self):
+        """mkfs.ext4 must still be denied even with boundary matching."""
+        e = PolicyEngine()
+        assert e.check_shell("mkfs.ext4 /dev/sda1") == Decision.DENY
+
+    def test_deny_does_not_false_match_inside_word(self):
+        """deny=['dd'] must not fire on 'git add' (contains 'dd')."""
+        shell = ShellPolicy(mode="denylist", allow=[], confirm=[], deny=["dd"])
+        e = PolicyEngine(Policy(defaults=PolicyDefaults(shell=shell)))
+        assert e.check_shell("git add .") == Decision.ALLOW
+        assert e.check_shell("dd if=/dev/zero of=/tmp/x") == Decision.DENY
+
 
 # ── filesystem policy ─────────────────────────────────────────────────────────
 
