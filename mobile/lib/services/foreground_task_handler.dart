@@ -28,7 +28,14 @@ class MirachTaskHandler extends TaskHandler {
     _api = MirachApi(baseUrl: baseUrl, token: token);
     _sse = SseClient();
     _sse!.reconnectFrom(baseUrl, token, since);
-    _sub = _sse!.events.listen(_handleEvent);
+    _sub = _sse!.events.listen(
+      _handleEvent,
+      onError: (e) {
+        if (e.toString().contains('invalid_token')) {
+          _setError('Token inválido — abre la app para reconectar');
+        }
+      },
+    );
   }
 
   void _handleEvent(Map<String, dynamic> ev) {
@@ -60,8 +67,11 @@ class MirachTaskHandler extends TaskHandler {
         // After a confirm resolves, show working again until done.
         _setWorking();
       case 'done':
-      case 'error':
         _setIdle();
+      case 'error':
+        final raw = ev['message'] as String? ?? 'Error desconocido';
+        final msg = raw.length > 60 ? '${raw.substring(0, 57)}…' : raw;
+        _setError(msg);
     }
   }
 
@@ -82,6 +92,16 @@ class MirachTaskHandler extends TaskHandler {
       FlutterForegroundTask.updateService(
         notificationTitle: 'Mirach',
         notificationText: 'Toca para volver',
+        notificationButtons: [],
+      ),
+    );
+  }
+
+  void _setError(String msg) {
+    unawaited(
+      FlutterForegroundTask.updateService(
+        notificationTitle: '⚠ Mirach — error',
+        notificationText: msg,
         notificationButtons: [],
       ),
     );

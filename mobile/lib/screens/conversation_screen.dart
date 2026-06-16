@@ -85,6 +85,7 @@ class _ConversationScreenState extends State<ConversationScreen>
   // ── Background lifecycle ──────────────────────────────────────────────────
   bool _inBackground = false;
   int _savedSince = 0;
+  bool _bgServiceFailed = false;
 
   final _inputCtrl = TextEditingController();
   final _inputFocusNode = FocusNode();
@@ -279,8 +280,10 @@ class _ConversationScreenState extends State<ConversationScreen>
         callback: startCallback,
       );
     } catch (_) {
-      // Notification permission denied or service start blocked — background
-      // presence unavailable but app state is otherwise unaffected.
+      // Notification permission denied or service start blocked.
+      // Can't show a notification without permission — flag it so the app
+      // shows a snackbar when the user returns.
+      _bgServiceFailed = true;
     }
   }
 
@@ -288,6 +291,22 @@ class _ConversationScreenState extends State<ConversationScreen>
     await FlutterForegroundTask.stopService();
     if (!mounted) return;
     _resumeSse(_savedSince);
+    if (_bgServiceFailed) {
+      _bgServiceFailed = false;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Servicio en background no disponible — activa el permiso de notificaciones en Ajustes.',
+            ),
+            backgroundColor: Color(0xFF3a1a1a),
+            duration: Duration(seconds: 6),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      });
+    }
   }
 
   void _handleEvent(Map<String, dynamic> ev) {
