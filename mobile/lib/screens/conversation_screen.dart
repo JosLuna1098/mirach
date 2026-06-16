@@ -169,12 +169,6 @@ class _ConversationScreenState extends State<ConversationScreen>
     super.dispose();
   }
 
-  @override
-  void reassemble() {
-    super.reassemble();
-    _showAutoSendHint();
-  }
-
   Future<void> _loadPrefs() async {
     final v = await _storage.read(key: 'mirach_verbose');
     final a = await _storage.read(key: 'mirach_autosend');
@@ -193,7 +187,6 @@ class _ConversationScreenState extends State<ConversationScreen>
         _ => _TtsMode.auto,
       };
     });
-    _showAutoSendHint();
   }
 
   Future<void> _initTts() async {
@@ -669,32 +662,6 @@ class _ConversationScreenState extends State<ConversationScreen>
       setState(() => _autoSendRemaining = 0);
       FocusScope.of(context).requestFocus(_inputFocusNode);
     }
-  }
-
-  void _showAutoSendHint() {
-    if (!_autoSendEnabled) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_autoSendEnabled) return;
-      final messenger = ScaffoldMessenger.of(context);
-      messenger.clearSnackBars();
-      messenger.showSnackBar(
-        SnackBar(
-          content: const Text(
-            'Tu mensaje de voz se envía solo tras unos segundos. ¿Prefieres '
-            'revisarlo antes? Apaga el envío automático desde el menú ⋮',
-            style: TextStyle(color: Color(0xFFe8e8e8)),
-          ),
-          duration: const Duration(seconds: 5),
-          backgroundColor: const Color(0xFF263326),
-          behavior: SnackBarBehavior.floating,
-          action: SnackBarAction(
-            label: 'Entendido',
-            textColor: const Color(0xFF4caf50),
-            onPressed: () => messenger.hideCurrentSnackBar(),
-          ),
-        ),
-      );
-    });
   }
 
   // ── Mic / recording ───────────────────────────────────────────────────────
