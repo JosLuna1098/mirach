@@ -29,6 +29,8 @@ class MirachApi {
 
   Future<Map<String, dynamic>> closeSession() => _post('/close_session', {});
 
+  Future<Map<String, dynamic>> clearQueue() => _post('/clear_queue', {});
+
   static Future<String> pair(
     String baseUrl,
     String code, {

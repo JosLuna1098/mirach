@@ -134,6 +134,9 @@ class _ConversationScreenState extends State<ConversationScreen>
   // ── Settings popover ──────────────────────────────────────────────────────
   bool _settingsOpen = false;
 
+  // ── Turn state (derived from SSE) ─────────────────────────────────────────
+  bool _turnActive = false;
+
   // ── Lifecycle ─────────────────────────────────────────────────────────────
 
   @override
@@ -345,10 +348,12 @@ class _ConversationScreenState extends State<ConversationScreen>
         case 'user_turn':
           needsStopTts = true;
           _isSpeaking = false;
+          _turnActive = true;
           _onUserTurn(ev);
         case 'text_delta':
           _onTextDelta(ev);
         case 'done':
+          _turnActive = false;
           pendingTts = _handleDone(ev);
         case 'tool_call':
           _onToolCall(ev);
@@ -359,6 +364,7 @@ class _ConversationScreenState extends State<ConversationScreen>
         case 'error':
           needsStopTts = true;
           _isSpeaking = false;
+          _turnActive = false;
           _onError(ev);
       }
     });
@@ -518,10 +524,89 @@ class _ConversationScreenState extends State<ConversationScreen>
     }
   }
 
-  Future<void> _stop() async {
+  Future<void> _sendInterrupt() async {
+    final text = _inputCtrl.text.trim();
+    if (text.isEmpty || _sending) return;
+    final isVoice = _pendingVoiceTurnText == text;
+    _pendingVoiceTurnText = null;
+    _lastSentText = text;
+    _lastSentWasVoice = isVoice;
+    _inputCtrl.clear();
+    setState(() {
+      _sending = true;
+      _isSpeaking = false;
+    });
+    unawaited(_tts.stop());
     try {
-      await _api.stop();
-    } catch (_) {}
+      await _api.turn(text, interrupt: true, clearQueue: false);
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  Future<void> _showNewConversationDialog() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1e1e1e),
+        title: const Text('Nueva conversación', style: TextStyle(color: Color(0xFFe0e0e0))),
+        content: const Text(
+          'Se descarta el turno en curso y la cola, y empieza una conversación nueva. ¿Continuar?',
+          style: TextStyle(color: Color(0xFFaaaaaa)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancelar', style: TextStyle(color: Color(0xFF888888))),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Empezar', style: TextStyle(color: Color(0xFF4caf50))),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) {
+      try { await _api.stop(); } catch (_) {}
+      try { await _api.closeSession(); } catch (_) {}
+      if (mounted) {
+        setState(() {
+          _items.clear();
+          _liveItem = null;
+          _activeConfirm = null;
+          _queuedByText.clear();
+          _turnActive = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _showClearQueueDialog() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1e1e1e),
+        title: const Text('Borrar cola', style: TextStyle(color: Color(0xFFe0e0e0))),
+        content: const Text(
+          'Se eliminan los turnos en cola. El turno en curso sigue. ¿Continuar?',
+          style: TextStyle(color: Color(0xFFaaaaaa)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancelar', style: TextStyle(color: Color(0xFF888888))),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Borrar', style: TextStyle(color: Color(0xFFf44336))),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) {
+      try { await _api.clearQueue(); } catch (_) {}
+      // Daemon publishes queue_cleared → _onQueueCleared() handles UI cleanup.
+    }
   }
 
   Future<void> _confirmAction(String toolCallId, _Item item) async {
@@ -817,9 +902,10 @@ class _ConversationScreenState extends State<ConversationScreen>
           ],
         ),
         actions: [
-          TextButton(
-            onPressed: _stop,
-            child: const Text('Stop', style: TextStyle(color: Color(0xFFf44336))),
+          IconButton(
+            icon: const Icon(Icons.add_comment_outlined, color: Color(0xFF888888)),
+            tooltip: 'Nueva conversación',
+            onPressed: _showNewConversationDialog,
           ),
           IconButton(
             icon: const Icon(Icons.more_vert, color: Color(0xFFcccccc)),
@@ -854,6 +940,35 @@ class _ConversationScreenState extends State<ConversationScreen>
                     unawaited(_tts.stop());
                   },
                 ),
+              if (_queuedByText.isNotEmpty)
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(0, 4, 14, 0),
+                    child: GestureDetector(
+                      onTap: _showClearQueueDialog,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF1e1e1e),
+                          border: Border.all(color: const Color(0xFF444444)),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.delete_outline, size: 13, color: Color(0xFF888888)),
+                            SizedBox(width: 4),
+                            Text(
+                              'Borrar cola',
+                              style: TextStyle(color: Color(0xFF888888), fontSize: 12),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
               _InputBar(
                 controller: _inputCtrl,
                 focusNode: _inputFocusNode,
@@ -861,7 +976,11 @@ class _ConversationScreenState extends State<ConversationScreen>
                 sttStatus: _sttStatus,
                 recordDuration: _recordDuration,
                 autoSendRemaining: _autoSendRemaining,
+                turnActive: _turnActive,
+                hasConfirm: _activeConfirm != null,
+                queueNotEmpty: _queuedByText.isNotEmpty,
                 onSend: _send,
+                onInterrupt: _sendInterrupt,
                 onMicTap: _onMicTap,
                 onPttStart: _onPttStart,
                 onPttEnd: _onPttEnd,
@@ -1579,7 +1698,11 @@ class _InputBar extends StatelessWidget {
     required this.sttStatus,
     required this.recordDuration,
     required this.autoSendRemaining,
+    required this.turnActive,
+    required this.hasConfirm,
+    required this.queueNotEmpty,
     required this.onSend,
+    required this.onInterrupt,
     required this.onMicTap,
     required this.onPttStart,
     required this.onPttEnd,
@@ -1591,7 +1714,11 @@ class _InputBar extends StatelessWidget {
   final _SttStatus sttStatus;
   final Duration recordDuration;
   final double autoSendRemaining;
+  final bool turnActive;
+  final bool hasConfirm;
+  final bool queueNotEmpty;
   final VoidCallback onSend;
+  final VoidCallback onInterrupt;
   final VoidCallback onMicTap;
   final VoidCallback onPttStart;
   final VoidCallback onPttEnd;
@@ -1603,6 +1730,7 @@ class _InputBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final canSend =
         controller.text.trim().isNotEmpty && !sending && !_isRecording && !_isTranscribing;
+    final showInterrupt = turnActive || hasConfirm || queueNotEmpty;
 
     return Container(
       decoration: const BoxDecoration(
@@ -1612,10 +1740,11 @@ class _InputBar extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
+          // Auto-send countdown banner
           if (autoSendRemaining > 0)
             Container(
               width: double.infinity,
-              padding: const EdgeInsets.fromLTRB(56, 6, 14, 0),
+              padding: const EdgeInsets.fromLTRB(14, 6, 14, 0),
               child: Row(
                 children: [
                   const Icon(Icons.edit, size: 13, color: Color(0xFF4caf50)),
@@ -1629,64 +1758,119 @@ class _InputBar extends StatelessWidget {
                 ],
               ),
             ),
+          // Row 1: text field / recording display / transcribing display
           Padding(
-            padding: const EdgeInsets.fromLTRB(8, 8, 14, 14),
+            padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
+            child: _isRecording
+                ? _RecordingDisplay(duration: recordDuration)
+                : _isTranscribing
+                    ? _TranscribingDisplay()
+                    : TextField(
+                        controller: controller,
+                        focusNode: focusNode,
+                        maxLines: 6,
+                        minLines: 1,
+                        style: const TextStyle(color: Color(0xFFe0e0e0), fontSize: 14),
+                        onSubmitted: canSend ? (_) => onSend() : null,
+                        decoration: InputDecoration(
+                          hintText: 'Escribe un mensaje…',
+                          hintStyle: const TextStyle(color: Color(0xFF555555)),
+                          filled: true,
+                          fillColor: const Color(0xFF252525),
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 13, vertical: 9),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            borderSide: const BorderSide(color: Color(0xFF383838)),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                            borderSide: const BorderSide(color: Color(0xFF4caf50)),
+                          ),
+                        ),
+                      ),
+          ),
+          // Row 2: Interrumpir (left, on-demand) | Spacer | Mic + Enviar (right)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 0, 8, 10),
             child: Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
+                if (showInterrupt)
+                  _InterruptButton(
+                    highlighted: hasConfirm,
+                    enabled: canSend,
+                    onPressed: canSend ? onInterrupt : null,
+                  ),
+                const Spacer(),
                 _MicButton(
                   status: sttStatus,
                   onTap: onMicTap,
                   onPttStart: onPttStart,
                   onPttEnd: onPttEnd,
                 ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: _isRecording
-                      ? _RecordingDisplay(duration: recordDuration)
-                      : _isTranscribing
-                          ? _TranscribingDisplay()
-                          : TextField(
-                              controller: controller,
-                              focusNode: focusNode,
-                              style: const TextStyle(color: Color(0xFFe0e0e0), fontSize: 14),
-                              onSubmitted: canSend ? (_) => onSend() : null,
-                              decoration: InputDecoration(
-                                hintText: 'Type a message…',
-                                hintStyle: const TextStyle(color: Color(0xFF555555)),
-                                filled: true,
-                                fillColor: const Color(0xFF252525),
-                                contentPadding: const EdgeInsets.symmetric(
-                                  horizontal: 13,
-                                  vertical: 9,
-                                ),
-                                enabledBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(8),
-                                  borderSide: const BorderSide(color: Color(0xFF383838)),
-                                ),
-                                focusedBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(8),
-                                  borderSide: const BorderSide(color: Color(0xFF4caf50)),
-                                ),
-                              ),
-                            ),
-                ),
-                const SizedBox(width: 8),
-                if (!_isRecording && !_isTranscribing)
+                if (!_isRecording && !_isTranscribing) ...[
+                  const SizedBox(width: 8),
                   ElevatedButton(
                     onPressed: canSend ? onSend : null,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFF2e7d32),
                       disabledBackgroundColor: const Color(0xFF1a2a1a),
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                     ),
-                    child: const Text('Send', style: TextStyle(fontSize: 14)),
+                    child: const Text('Enviar', style: TextStyle(fontSize: 14)),
                   ),
+                ],
               ],
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+// ── Interrupt button ──────────────────────────────────────────────────────────
+
+class _InterruptButton extends StatelessWidget {
+  const _InterruptButton({
+    required this.highlighted,
+    required this.enabled,
+    required this.onPressed,
+  });
+
+  final bool highlighted;
+  final bool enabled;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final borderColor = highlighted ? const Color(0xFFffa030) : const Color(0xFF555555);
+    final bgColor = highlighted ? const Color(0xFF2a1e00) : const Color(0xFF1e1e1e);
+    final contentColor = highlighted ? const Color(0xFFffa030) : const Color(0xFF888888);
+    final effectiveBorder = enabled ? borderColor : borderColor.withAlpha(100);
+    final effectiveBg = enabled ? bgColor : bgColor.withAlpha(160);
+    final effectiveContent = enabled ? contentColor : contentColor.withAlpha(100);
+
+    return GestureDetector(
+      onTap: onPressed,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: effectiveBg,
+          border: Border.all(color: effectiveBorder),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.skip_next_rounded, size: 16, color: effectiveContent),
+            const SizedBox(width: 4),
+            Text(
+              'Interrumpir',
+              style: TextStyle(fontSize: 13, color: effectiveContent),
+            ),
+          ],
+        ),
       ),
     );
   }
