@@ -314,3 +314,51 @@ class TestYAMLLoading:
 
         e = PolicyEngine.load(path=policy_file)
         assert e.max_tool_calls_per_turn == 3
+
+
+class TestDangerousTemplate:
+    """The shipped `mirach policy dangerous` template must allow almost
+    everything while still hard-blocking privilege escalation and catastrophic
+    disk/system operations."""
+
+    @pytest.fixture()
+    def engine(self):
+        pytest.importorskip("yaml")
+        template = Path(__file__).resolve().parents[2] / "policy.dangerous.example.yaml"
+        assert template.exists(), f"missing {template}"
+        return PolicyEngine.from_file(template)
+
+    @pytest.mark.parametrize(
+        "command",
+        ["sudo apt update", "su -", "doas pacman -Syu", "pkexec something"],
+    )
+    def test_privilege_escalation_denied(self, engine, command):
+        assert engine.check_shell(command) == Decision.DENY
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "rm -rf /",
+            "mkfs.ext4 /dev/sda1",
+            "dd if=/dev/zero of=/dev/sda",
+            "fdisk /dev/sda",
+            "wipefs -a /dev/sda",
+            "shutdown now",
+            "reboot",
+        ],
+    )
+    def test_catastrophic_commands_denied(self, engine, command):
+        assert engine.check_shell(command) == Decision.DENY
+
+    @pytest.mark.parametrize(
+        "command",
+        ["rm note.txt", "npm run build", "git push", "pip install requests", "mv a b"],
+    )
+    def test_ordinary_commands_allowed_without_confirm(self, engine, command):
+        assert engine.check_shell(command) == Decision.ALLOW
+
+    def test_writes_outside_denied_dirs_are_allowed(self, engine):
+        assert engine.check_filesystem_write(Path.home() / "Projects" / "x.txt") == Decision.ALLOW
+
+    def test_writes_to_credential_dir_still_denied(self, engine):
+        assert engine.check_filesystem_write(Path.home() / ".ssh" / "id_rsa") == Decision.DENY

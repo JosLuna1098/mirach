@@ -438,6 +438,70 @@ def cmd_backend(args: argparse.Namespace) -> int:
     return 0
 
 
+POLICY_MODES = {"safe", "dangerous"}
+
+
+def _policy_label(path: Path) -> str:
+    """Best-effort label for a policy file based on its filename."""
+    name = path.name
+    if name == "policy.dangerous.yaml":
+        return "dangerous"
+    if name == "policy.yaml":
+        return "safe"
+    return "custom"
+
+
+def cmd_policy(args: argparse.Namespace) -> int:
+    env_path = Path(args.env_file) if args.env_file else ENV_PATH
+    safe_path = config.BASE_DIR / "policy.yaml"
+    dangerous_path = config.BASE_DIR / "policy.dangerous.yaml"
+    dangerous_template = config.BASE_DIR / "policy.dangerous.example.yaml"
+
+    if args.mode is None:
+        env = read_env(env_path)
+        active = env.get("MIRACH_NATIVE_POLICY") or str(config.NATIVE_POLICY_PATH)
+        print(f"Policy: {_policy_label(Path(active))}")
+        print(f"  File: {active}")
+        return 0
+
+    mode = args.mode
+    if mode not in POLICY_MODES:
+        print(f"Unknown policy mode '{mode}'. Choose: safe or dangerous", file=sys.stderr)
+        return 1
+
+    if mode == "safe":
+        set_env_vars({"MIRACH_NATIVE_POLICY": str(safe_path)}, env_path)
+        print(f"Policy → safe  ({safe_path})")
+    else:  # dangerous
+        print("⚠  DANGEROUS policy: Mirach will run almost anything WITHOUT asking.")
+        print("   Still blocked: sudo/privilege escalation, disk format/wipe, shutdown,")
+        print("   and writes to system + credential directories.")
+        if (
+            not args.yes
+            and sys.stdin.isatty()
+            and not _confirm("Enable the dangerous policy?", default=False)
+        ):
+            print("Cancelled — policy unchanged.")
+            return 0
+        if not dangerous_path.exists():
+            if not dangerous_template.exists():
+                print(f"Template not found: {dangerous_template}", file=sys.stderr)
+                return 1
+            shutil.copyfile(dangerous_template, dangerous_path)
+            print(f"Created {dangerous_path} (edit it to tune the profile).")
+        set_env_vars({"MIRACH_NATIVE_POLICY": str(dangerous_path)}, env_path)
+        print(f"Policy → dangerous  ({dangerous_path})")
+
+    if _systemd_unit_active():
+        print("Restarting daemon...", end=" ", flush=True)
+        rc = _run_systemctl("restart")
+        print("done" if rc == 0 else f"failed (exit {rc})")
+    else:
+        print("Restart the daemon: mirach start  or  ./run_daemon.sh")
+
+    return 0
+
+
 # ── entry point ────────────────────────────────────────────────────────────────
 
 
@@ -521,6 +585,25 @@ def main(argv: list[str] | None = None) -> int:
         help="Accept all prompts non-interactively (e.g. auto-pull missing Ollama model).",
     )
     p_backend.set_defaults(func=cmd_backend)
+
+    # policy ──────────────────────────────────────────────────────────────────
+    p_policy = sub.add_parser(
+        "policy",
+        help="Show or switch the permission policy (safe|dangerous).",
+    )
+    p_policy.add_argument(
+        "mode",
+        nargs="?",
+        metavar="MODE",
+        help="Policy to activate: safe or dangerous. Omit to show current.",
+    )
+    p_policy.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help="Skip the confirmation prompt when enabling the dangerous policy.",
+    )
+    p_policy.set_defaults(func=cmd_policy)
 
     # help ────────────────────────────────────────────────────────────────────
     p_help = sub.add_parser("help", help="Show this help message.")

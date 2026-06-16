@@ -1,0 +1,92 @@
+# Mirach DANGEROUS policy — template for `mirach policy dangerous`.
+#
+# This profile removes the confirmation prompts: Mirach runs almost anything
+# without asking. Enable it only on a machine you trust, where you accept that
+# the assistant can read/modify your files and run normal commands freely.
+#
+# The ONLY things blocked, on purpose:
+#   1. Privilege escalation (sudo/su/doas/pkexec). These need a password and
+#      would fail anyway — but we deny them explicitly as an extra safety net so
+#      Mirach tells you it cannot run them instead of hanging on a password prompt.
+#   2. Catastrophic disk/system operations (format, partition, wipe, dd to a
+#      device, shutdown/reboot, fork bomb).
+#   3. Writes to system directories and credential stores (need root anyway).
+#
+# Everything else — reading anywhere, writing anywhere in your own files, running
+# any ordinary command — is allowed with no confirmation.
+#
+# Decision precedence (highest -> lowest): deny > confirm > allow.
+# Switch back to the safe policy with:  mirach policy safe
+
+version: 1
+
+defaults:
+
+  filesystem:
+    # Empty allow_read = read anything (subject to the deny list below).
+    allow_read: []
+    # "/" = write anywhere (subject to the deny list below). This is what makes
+    # the profile "dangerous": no write confirmation outside the denied paths.
+    allow_write:
+      - /
+    # Always denied, even in dangerous mode. System dirs need root anyway; the
+    # credential stores are a deliberate safety net. Delete lines here if you
+    # truly want zero restrictions.
+    deny:
+      - /etc
+      - /usr
+      - /boot
+      - /sys
+      - /proc
+      - ~/.ssh
+      - ~/.gnupg
+
+  shell:
+    # denylist = every command runs freely EXCEPT the patterns listed in deny.
+    mode: denylist
+    allow: []
+    # Never pause to confirm anything.
+    confirm: []
+    deny:
+      # privilege escalation — blocked on purpose (also needs a password)
+      - sudo
+      - su
+      - doas
+      - pkexec
+      # catastrophic filesystem / disk destruction
+      - "rm -rf /"
+      - "rm -fr /"
+      - "rm -rf /*"
+      - mkfs
+      - "dd "
+      - fdisk
+      - parted
+      - gdisk
+      - sgdisk
+      - wipefs
+      - shred
+      - blkdiscard
+      # power / system state
+      - shutdown
+      - reboot
+      - halt
+      - poweroff
+      - "init 0"
+      - "init 6"
+      # fork bomb
+      - ":(){:|:&};:"
+
+  network:
+    web_search: true
+    web_fetch:
+      allow_domains: ["*"]
+      deny_domains: []
+
+  system_config:
+    require_confirmation: false
+
+guards:
+  # Strip system-prompt content from model output before it reaches TTS / the user.
+  never_reveal_system_prompt: true
+  # Abort the inner loop after this many tool calls in one turn (runaway guard).
+  max_tool_calls_per_turn: 50

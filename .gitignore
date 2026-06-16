@@ -59,4 +59,5 @@ user_scripts/*.py
 # Local planning / design scratch (never published — internal notes)
 planning/
 policy.yaml
+policy.dangerous.yaml
 opencode.json

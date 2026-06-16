@@ -1,6 +1,6 @@
 PY := $(if $(wildcard venv/bin/python3),venv/bin/python3,python3)
 
-.PHONY: lang logs start stop restart status install test lint fmt
+.PHONY: lang logs start stop restart status policy-safe policy-dangerous install test lint fmt
 
 # ── daemon operations ─────────────────────────────────────────────────────────
 
@@ -22,6 +22,13 @@ restart:
 
 status:
 	$(PY) -m mirach.cli status
+
+# Permission policy toggle (safe = restrictive default, dangerous = no prompts)
+policy-safe:
+	$(PY) -m mirach.cli policy safe
+
+policy-dangerous:
+	$(PY) -m mirach.cli policy dangerous
 
 # ── dev shortcuts ─────────────────────────────────────────────────────────────
 
