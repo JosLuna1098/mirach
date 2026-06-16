@@ -235,3 +235,61 @@ def test_confirm_deny_bus_delegate_to_backend(asst):
     assert asst._fake.confirmed == ["tc-1"]
     assert asst._fake.denied == ["tc-2"]
     assert asst.bus is asst._fake.bus
+
+
+# ── clear_queue ──────────────────────────────────────────────────────────────
+
+
+def test_clear_queue_empties_queue(asst):
+    fake = asst._fake
+    fake.block()
+    asst.submit_turn("A")
+    assert _wait_until(lambda: fake.calls == ["A"])
+    asst.submit_turn("B")
+    asst.submit_turn("C")
+    assert list(asst._queue) == ["B", "C"]
+
+    asst.clear_queue()
+
+    assert len(asst._queue) == 0
+    fake.release()
+    assert _wait_until(lambda: asst._state is State.IDLE)
+    # B and C were dropped, never executed.
+    assert "B" not in fake.calls and "C" not in fake.calls
+
+
+def test_clear_queue_does_not_interrupt_current(asst):
+    fake = asst._fake
+    fake.block()
+    asst.submit_turn("A")
+    assert _wait_until(lambda: fake.calls == ["A"])
+    asst.submit_turn("B")
+
+    asst.clear_queue()
+
+    # A is still running (blocked); state must still be PROCESSING.
+    assert asst._state is State.PROCESSING
+    assert fake.calls == ["A"]
+
+    fake.release()
+    assert _wait_until(lambda: asst._state is State.IDLE)
+    assert "B" not in fake.calls
+
+
+def test_clear_queue_publishes_queue_cleared_only_if_had_queue(asst):
+    events = []
+    asst.bus.subscribe(events.append)
+
+    # Empty queue: no event.
+    asst.clear_queue()
+    assert not any(e.type == "queue_cleared" for e in events)
+
+    fake = asst._fake
+    fake.block()
+    asst.submit_turn("A")
+    assert _wait_until(lambda: fake.calls == ["A"])
+    asst.submit_turn("B")
+
+    asst.clear_queue()
+    assert _wait_until(lambda: any(e.type == "queue_cleared" for e in events))
+    fake.release()

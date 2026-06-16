@@ -7,11 +7,12 @@ GET  /events?token=T&since=N   — SSE stream of ConversationBus events.
                                   `since` = event index for replay (default 0).
 POST /pair      {code, device?} — Exchange a displayed pairing code for a
                                   long-lived device token. No auth required.
-POST /turn      {text, interrupt?, clear_queue?}
-POST /stop      {}
-POST /confirm   {tool_call_id}
-POST /deny      {tool_call_id}
+POST /turn        {text, interrupt?, clear_queue?}
+POST /stop        {}
+POST /confirm     {tool_call_id}
+POST /deny        {tool_call_id}
 POST /close_session {}
+POST /clear_queue {}
 
 Auth
 ----
@@ -178,6 +179,7 @@ class MirachServer:
                     "/confirm": server._handle_confirm,
                     "/deny": server._handle_deny,
                     "/close_session": server._handle_close_session,
+                    "/clear_queue": server._handle_clear_queue,
                 }
                 fn = _routes.get(path)
                 if fn is None:
@@ -315,6 +317,12 @@ class MirachServer:
         if not self._check_auth(handler):
             return
         self._assistant.reset_session()
+        self._send_json(handler, 200, {"status": "ok"})
+
+    def _handle_clear_queue(self, handler: BaseHTTPRequestHandler) -> None:
+        if not self._check_auth(handler):
+            return
+        self._assistant.clear_queue()
         self._send_json(handler, 200, {"status": "ok"})
 
     def _handle_root(self, handler: BaseHTTPRequestHandler) -> None:

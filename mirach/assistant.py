@@ -504,6 +504,14 @@ class Assistant:
         self._resume_after_interrupt()
         log.info("Stopped: current run cancelled and queue cleared")
 
+    def clear_queue(self) -> None:
+        """Vacía la cola de turnos pendientes sin tocar el turno en curso."""
+        with self._state_lock:
+            had_queued = bool(self._queue)
+            self._queue.clear()
+        if had_queued:
+            self._publish_queue_cleared()
+
     def confirm(self, tool_call_id: str) -> None:
         """Approve a mid-flight tool confirmation (voice answer or relayed from the server)."""
         self._clear_voice_confirm(tool_call_id)
