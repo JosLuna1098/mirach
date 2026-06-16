@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
 import re
 import subprocess
 import threading
@@ -97,11 +98,15 @@ class OpenCodeServeBackend:
         ]
         if config.OPENCODE_SERVE_LOG:
             args.append("--print-logs")
+        # Strip DBus so opencode cannot send its own desktop notifications for
+        # permission requests — our harness handles those via the mobile/widget UI.
+        env = {**os.environ, "DBUS_SESSION_BUS_ADDRESS": ""}
         self._proc = subprocess.Popen(
             args,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            env=env,
         )
         deadline = time.time() + self._startup_timeout
         output_lines: list[str] = []

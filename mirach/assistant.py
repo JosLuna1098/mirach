@@ -393,7 +393,8 @@ class Assistant:
             # Step 6: Deliver the response on the turn's channel (voice speaks; text
             # already streamed to the bus, so on_bus=True keeps the PC silent).
             self._conv.append(i18n.t("assistant"), result.response)
-            notify.notify(i18n.t("assistant"), result.response)
+            if channel == "voice":
+                notify.notify(i18n.t("assistant"), result.response)
             self._respond(result.response, channel, on_bus=True)
             log.info("Pipeline complete in %.2fs", time.time() - started)
         except _Interrupted:
