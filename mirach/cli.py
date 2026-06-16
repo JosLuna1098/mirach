@@ -307,17 +307,24 @@ def main(argv: list[str] | None = None) -> int:
 
     # start / stop / restart / status ─────────────────────────────────────────
     for _name, _help, _func in [
-        ("start", "Start the mirach daemon.", cmd_start),
-        ("stop", "Stop the mirach daemon.", cmd_stop),
-        ("restart", "Restart the mirach daemon.", cmd_restart),
-        ("status", "Show daemon status.", cmd_status),
+        ("start", "Start the daemon via systemd (background, logs to journal).", cmd_start),
+        ("stop", "Stop the daemon via systemd.", cmd_stop),
+        ("restart", "Restart the daemon via systemd.", cmd_restart),
+        ("status", "Show daemon status via systemd.", cmd_status),
     ]:
         _p = sub.add_parser(_name, help=_help)
         _p.set_defaults(func=_func)
 
-    # run (foreground launcher, no systemd) ───────────────────────────────────
-    p_run = sub.add_parser("run", help="Launch daemon in the foreground (no systemd).")
+    # run (foreground launcher — no systemd) ──────────────────────────────────
+    p_run = sub.add_parser(
+        "run",
+        help="Run the daemon in the foreground (no systemd; blocks terminal; use for debugging or non-systemd setups).",
+    )
     p_run.set_defaults(func=cmd_run)
+
+    # help ────────────────────────────────────────────────────────────────────
+    p_help = sub.add_parser("help", help="Show this help message.")
+    p_help.set_defaults(func=lambda args: parser.print_help() or 0)
 
     args = parser.parse_args(argv)
     if not hasattr(args, "func"):
