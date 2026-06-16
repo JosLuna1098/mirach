@@ -268,8 +268,12 @@ class _ConversationScreenState extends State<ConversationScreen>
     // Bail if the user came back while we were awaiting above.
     if (!_inBackground) return;
 
-    // If notification permission was denied at startup the service still starts;
-    // on Android 13+ the system simply won't display the notification.
+    // The notification only shows if POST_NOTIFICATIONS is granted. On Android
+    // 13+ startService() does NOT throw when the permission is missing — the
+    // service runs but the notification is silently suppressed. So detect the
+    // missing permission explicitly rather than relying on an exception.
+    final notifGranted = await Permission.notification.isGranted;
+
     try {
       await FlutterForegroundTask.startService(
         serviceId: 2601,
@@ -279,10 +283,10 @@ class _ConversationScreenState extends State<ConversationScreen>
         notificationInitialRoute: '/',
         callback: startCallback,
       );
+      // Service started but the notification won't be visible without permission.
+      _bgServiceFailed = !notifGranted;
     } catch (_) {
-      // Notification permission denied or service start blocked.
-      // Can't show a notification without permission — flag it so the app
-      // shows a snackbar when the user returns.
+      // Service start blocked entirely — warn on resume.
       _bgServiceFailed = true;
     }
   }
@@ -295,14 +299,23 @@ class _ConversationScreenState extends State<ConversationScreen>
       _bgServiceFailed = false;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Servicio en background no disponible — activa el permiso de notificaciones en Ajustes.',
+        final messenger = ScaffoldMessenger.of(context);
+        messenger.clearSnackBars();
+        messenger.showSnackBar(
+          SnackBar(
+            content: const Text(
+              'No pudiste recibir avisos mientras estabas fuera. Activa las '
+              'notificaciones para que Mirach te avise si necesita tu atención.',
+              style: TextStyle(color: Color(0xFFe8d0d0)),
             ),
-            backgroundColor: Color(0xFF3a1a1a),
-            duration: Duration(seconds: 6),
+            backgroundColor: const Color(0xFF3a1a1a),
+            duration: const Duration(seconds: 8),
             behavior: SnackBarBehavior.floating,
+            action: SnackBarAction(
+              label: 'Ajustes',
+              textColor: const Color(0xFFff8080),
+              onPressed: openAppSettings,
+            ),
           ),
         );
       });
