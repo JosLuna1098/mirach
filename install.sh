@@ -18,7 +18,6 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_VOICE_URL="https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/low/en_US-lessac-low.onnx"
 DEFAULT_VOICE_NAME="en_US-lessac-low.onnx"
-OMARCHY_README_URL="https://raw.githubusercontent.com/robzolkos/omarchy-skill/master/README.md"
 OPENCODE_INSTALL_URL="https://opencode.ai/install"
 
 ASSUME_YES=0
@@ -137,17 +136,6 @@ if [[ "$DOWNLOAD_VOICE" == 1 ]]; then
         curl -L --fail -o "$target.json" "${VOICE_URL}.json"
         ok "Voice downloaded to voices/$VOICE_NAME"
     fi
-fi
-
-# --- 4. Omarchy reference (optional, for system prompts that mention it) ---
-if [[ ! -f "$REPO_DIR/omarchy.md" ]]; then
-    if confirm "Download Omarchy README as omarchy.md (reference for the LLM)?"; then
-        log "Fetching $OMARCHY_README_URL"
-        curl -L --fail -o "$REPO_DIR/omarchy.md" "$OMARCHY_README_URL"
-        ok "omarchy.md downloaded"
-    fi
-else
-    ok "omarchy.md already present (left untouched)"
 fi
 
 # --- 5. system_prompt.md ---
@@ -273,7 +261,6 @@ Next steps:
   2. Bind your hotkey to:        python3 $REPO_DIR/trigger.py
      (Hyprland example: bind = ALT, Z, exec, python3 $REPO_DIR/trigger.py)
   3. Watch logs:                 journalctl --user -u mirach -f
-  4. View last conversation:     $REPO_DIR/view_conversation.sh
 
 If you set MIRACH_VOICE to '$VOICE_NAME' or another voice, restart the service.
 EOF

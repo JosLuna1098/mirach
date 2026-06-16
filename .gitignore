@@ -14,7 +14,6 @@ env/
 
 # Local user configuration (NEVER commit)
 system_prompt.md
-omarchy.md
 config.local.*
 .env
 .env.*

@@ -7,23 +7,26 @@ description: Opening applications, launching terminals with visible commands, an
 
 ## Opening apps
 
-Always use `uwsm-app --` to launch applications on this system (Omarchy/Hyprland).
+Launch applications detached from the shell so they survive the session:
 
 ```
-uwsm-app -- <app-name>
+setsid -f <app-name>
 ```
 
 Examples:
-- `uwsm-app -- firefox`
-- `uwsm-app -- discord`
-- `uwsm-app -- obsidian`
+- `setsid -f firefox`
+- `setsid -f discord`
+- `setsid -f obsidian`
+
+> **Note (uwsm sessions):** In sessions managed by uwsm (Omarchy / Hyprland+uwsm), prefer
+> `uwsm-app -- <app>` to place the app in its own systemd scope.
 
 ## Terminal with visible command
 
 When the user wants to see a terminal running a command:
 
 ```
-uwsm-app -- ghostty -e {{shell}} -c "command; exec {{shell}}"
+setsid -f {{terminal}} -e {{shell}} -c "command; exec {{shell}}"
 ```
 
 This opens a terminal, runs the command, and keeps the shell open afterward.
