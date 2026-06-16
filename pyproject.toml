@@ -28,7 +28,7 @@ quality = [
 ]
 
 [project.scripts]
-mirach = "mirach.assistant:main"
+mirach = "mirach.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["mirach*"]

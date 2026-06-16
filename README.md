@@ -234,6 +234,36 @@ missing in your locale fall back to English silently.
 
 ---
 
+## CLI
+
+After `pip install -e .` (or the install wizard), a `mirach` command is available
+on your `$PATH`.
+
+| Command | What it does |
+|---|---|
+| `mirach lang [es\|en]` | Show or change the daemon language (locale + Whisper model); offers to change the voice if it doesn't match |
+| `mirach logs` | Follow the daemon log (`journalctl --user -u mirach -f`; falls back to `tail` of the log file) |
+| `mirach start` | `systemctl --user start mirach.service` |
+| `mirach stop` | `systemctl --user stop mirach.service` |
+| `mirach restart` | `systemctl --user restart mirach.service` |
+| `mirach status` | `systemctl --user status mirach.service` |
+| `mirach run` | Launch `run_daemon.sh` in the foreground (non-systemd environments) |
+
+`mirach lang es --yes` accepts the voice-change prompt non-interactively.
+
+### Makefile shortcuts
+
+```bash
+make lang LANG=es   # change daemon language
+make logs           # follow the log
+make start / stop / restart / status
+make test           # run pytest
+make lint           # ruff check .
+make fmt            # ruff check --fix . && ruff format .
+```
+
+---
+
 ## Architecture
 
 ```
