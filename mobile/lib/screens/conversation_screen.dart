@@ -2,10 +2,12 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../services/audio_recorder.dart';
+import '../services/foreground_task_handler.dart';
 import '../services/mirach_api.dart';
 import '../services/sse_client.dart';
 import '../services/tts_service.dart';
@@ -73,11 +75,16 @@ class ConversationScreen extends StatefulWidget {
   State<ConversationScreen> createState() => _ConversationScreenState();
 }
 
-class _ConversationScreenState extends State<ConversationScreen> {
+class _ConversationScreenState extends State<ConversationScreen>
+    with WidgetsBindingObserver {
   // ── SSE / API ─────────────────────────────────────────────────────────────
   late final MirachApi _api;
-  late final SseClient _sse;
+  late SseClient _sse;
   StreamSubscription<Map<String, dynamic>>? _sub;
+
+  // ── Background lifecycle ──────────────────────────────────────────────────
+  bool _inBackground = false;
+  int _savedSince = 0;
 
   final _inputCtrl = TextEditingController();
   final _inputFocusNode = FocusNode();
@@ -128,6 +135,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _api = MirachApi(baseUrl: widget.baseUrl, token: widget.token);
     _sse = SseClient();
     _inputCtrl.addListener(() => setState(() {}));
@@ -140,6 +148,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _sub?.cancel();
     _sse.dispose();
     _inputCtrl.dispose();
@@ -190,20 +199,81 @@ class _ConversationScreenState extends State<ConversationScreen> {
 
   // ── SSE ───────────────────────────────────────────────────────────────────
 
+  void _onSseError(Object e) {
+    if (e.toString().contains('invalid_token')) {
+      _logout();
+    } else {
+      if (mounted) setState(() => _connected = false);
+    }
+  }
+
   void _startSse() {
     _sub?.cancel();
+    _sse = SseClient();
     _sse.connect(widget.baseUrl, widget.token);
-    _sub = _sse.events.listen(
-      _handleEvent,
-      onError: (e) {
-        if (e.toString().contains('invalid_token')) {
-          _logout();
-        } else {
-          setState(() => _connected = false);
-        }
-      },
-    );
+    _sub = _sse.events.listen(_handleEvent, onError: _onSseError);
     setState(() => _connected = false);
+  }
+
+  void _resumeSse(int since) {
+    _sub?.cancel();
+    _sse = SseClient();
+    _sse.reconnectFrom(widget.baseUrl, widget.token, since);
+    _sub = _sse.events.listen(_handleEvent, onError: _onSseError);
+    if (mounted) setState(() => _connected = false);
+  }
+
+  // ── App lifecycle (background service) ───────────────────────────────────
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if ((state == AppLifecycleState.paused ||
+            state == AppLifecycleState.inactive) &&
+        !_inBackground) {
+      _inBackground = true;
+      unawaited(_onAppBackground());
+    } else if (state == AppLifecycleState.resumed && _inBackground) {
+      _inBackground = false;
+      unawaited(_onAppResumed());
+    }
+  }
+
+  Future<void> _onAppBackground() async {
+    _savedSince = _sse.since;
+
+    // Shut down the UI SSE synchronously before any async gap.
+    _sub?.cancel();
+    _sub = null;
+    _sse.dispose();
+    _sse = SseClient(); // fresh placeholder — safe for dispose() to call
+
+    // Persist credentials for the TaskHandler background isolate.
+    await FlutterForegroundTask.saveData(key: 'base_url', value: widget.baseUrl);
+    await FlutterForegroundTask.saveData(key: 'token', value: widget.token);
+    await FlutterForegroundTask.saveData(key: 'since', value: _savedSince.toString());
+
+    // Request POST_NOTIFICATIONS permission on Android 13+ (best-effort).
+    if (!await Permission.notification.isGranted) {
+      await Permission.notification.request();
+    }
+
+    // Bail if the user came back while we were awaiting above.
+    if (!_inBackground) return;
+
+    await FlutterForegroundTask.startService(
+      serviceId: 2601,
+      notificationTitle: 'Mirach',
+      notificationText: 'Toca para volver',
+      notificationButtons: [],
+      notificationInitialRoute: '/',
+      callback: startCallback,
+    );
+  }
+
+  Future<void> _onAppResumed() async {
+    await FlutterForegroundTask.stopService();
+    if (!mounted) return;
+    _resumeSse(_savedSince);
   }
 
   void _handleEvent(Map<String, dynamic> ev) {
