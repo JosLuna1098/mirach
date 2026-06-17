@@ -24,8 +24,8 @@ theme:
         icon: material/brightness-7
         name: Switch to dark mode
   features:
-    - navigation.instant
-    - navigation.instant.progress
+    # navigation.instant is intentionally omitted: it's incompatible with the
+    # mkdocs-static-i18n language switcher's contextual links.
     - navigation.tracking
     - navigation.sections
     - navigation.expand
@@ -56,6 +56,46 @@ markdown_extensions:
   - md_in_html
   - toc:
       permalink: true
+
+plugins:
+  - search
+  - i18n:
+      docs_structure: suffix
+      fallback_to_default: true
+      reconfigure_material: true
+      reconfigure_search: true
+      languages:
+        - locale: en
+          default: true
+          name: English
+          build: true
+        - locale: es
+          name: Español
+          build: true
+          nav_translations:
+            Home: Inicio
+            Tutorial: Tutorial
+            Get Started: Primeros pasos
+            Android App: App de Android
+            How-to Guides: Guías prácticas
+            Web Widget: Widget web
+            User Scripts: Scripts de usuario
+            Change Voice: Cambiar la voz
+            Change Whisper Model: Cambiar el modelo de Whisper
+            Add a Locale: Añadir un idioma
+            Persistent Memory: Memoria persistente
+            View Conversations: Ver conversaciones
+            Troubleshooting: Solución de problemas
+            Reference: Referencia
+            Configuration: Configuración
+            Architecture: Arquitectura
+            HTTP/SSE API: API HTTP/SSE
+            Dependencies: Dependencias
+            IPC Protocol: Protocolo IPC
+            User Scripts Format: Formato de scripts de usuario
+            Explanation: Explicación
+            Interfaces and Use Cases: Interfaces y casos de uso
+            Design Decisions: Decisiones de diseño
 
 nav:
   - Home: index.md
