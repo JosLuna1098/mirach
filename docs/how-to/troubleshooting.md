@@ -37,11 +37,13 @@ If you're using systemd, the service file should use `ExecStart=%h/mirach/run_da
 
 ```bash
 # Test OpenCode directly
-opencode run --model opencode/deepseek-v4-flash-free "hello"
+opencode run "hello"
 
 # Check authentication
 opencode auth
 ```
+
+The default backend (`opencode_serve`) spawns and supervises an `opencode serve` subprocess. If turns hang, confirm the `opencode` binary is on `PATH` and authenticated. The provider and model come from opencode's own config unless you override them with `MIRACH_OPENCODE_SERVE_PROVIDER_ID` / `MIRACH_OPENCODE_SERVE_MODEL_ID`.
 
 ## "Daemon is not running" notification
 
@@ -104,11 +106,26 @@ systemctl --user edit mirach
 
 ## LLM takes too long
 
-```bash
-# Increase timeout
-systemctl --user edit mirach
-# Add: Environment=MIRACH_OPENCODE_TIMEOUT=180
+Pick a faster model in opencode's config (or override it). For the `opencode_serve` backend:
 
-# Or switch to a faster model
-# Add: Environment=MIRACH_OPENCODE_MODEL=opencode/deepseek-v4-flash-free
+```bash
+systemctl --user edit mirach
+# Add: Environment=MIRACH_OPENCODE_SERVE_MODEL_ID=deepseek-v4-flash-free
 ```
+
+For the `native` backend, the request timeout is `MIRACH_NATIVE_TIMEOUT` (default 120s):
+
+```bash
+# Add: Environment=MIRACH_NATIVE_TIMEOUT=180
+```
+
+## Phone can't connect to the daemon
+
+```bash
+# The server binds 127.0.0.1 by default — the phone can't reach loopback.
+# Bind all interfaces in mirach.env:
+echo "MIRACH_SERVER_HOST=0.0.0.0" >> ~/mirach/mirach.env
+systemctl --user restart mirach
+```
+
+Then check the phone is on the same network (LAN or Tailscale) and use the PC's IP, not `127.0.0.1`. The pairing code is printed in the daemon logs at startup. See the [Android app tutorial](../tutorial/mobile-app.md).

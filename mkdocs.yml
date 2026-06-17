@@ -61,6 +61,7 @@ nav:
   - Home: index.md
   - Tutorial:
       - Get Started: tutorial/get-started.md
+      - Android App: tutorial/mobile-app.md
   - How-to Guides:
       - User Scripts: how-to/user-scripts.md
       - Change Voice: how-to/change-voice.md
@@ -72,6 +73,7 @@ nav:
   - Reference:
       - Configuration: reference/configuration.md
       - Architecture: reference/architecture.md
+      - HTTP/SSE API: reference/http-api.md
       - Dependencies: reference/dependencies.md
       - IPC Protocol: reference/ipc.md
       - User Scripts Format: reference/user-scripts-format.md

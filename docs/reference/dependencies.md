@@ -4,16 +4,19 @@
 
 | Package | Version | Purpose |
 |---|---|---|
-| `faster-whisper` | >=1.2, <2.0 | Speech-to-text via CTranslate2 (Whisper engine) |
-| `piper-tts` | >=1.4, <2.0 | Local neural text-to-speech |
-| `sounddevice` | >=0.5, <1.0 | Audio I/O — microphone capture and speaker playback |
-| `numpy` | >=1.26, <3.0 | Numerical operations for audio processing |
+| `faster-whisper` | >=1.2.1, <2.0 | Speech-to-text via CTranslate2 (Whisper engine) |
+| `piper-tts` | >=1.4.2, <2.0 | Local neural text-to-speech |
+| `pyyaml` | >=6.0, <7.0 | Parses `policy.yaml` (tool permission rules) |
+| `sounddevice` | >=0.5.5, <1.0 | Audio I/O — microphone capture and speaker playback |
+| `numpy` | >=2.4.6, <3.0 | Numerical operations for audio processing |
+
+The HTTP/SSE server uses only the Python standard library (`http.server`) — no web framework dependency.
 
 ## Optional dependencies
 
 | Package | Version | Purpose |
 |---|---|---|
-| `scipy` | >=1.11 | High-quality polyphase resampling for Whisper downsampling. Falls back to boxcar filter if not installed. |
+| `scipy` | >=1.17.1 | High-quality polyphase resampling for Whisper downsampling. Falls back to a boxcar filter if not installed. |
 
 Install with: `pip install -e ".[quality]"`
 
@@ -21,8 +24,8 @@ Install with: `pip install -e ".[quality]"`
 
 | Package | Version | Purpose |
 |---|---|---|
-| `pytest` | >=8.0 | Test framework |
-| `ruff` | >=0.6 | Linting and formatting |
+| `pytest` | >=9.0.3 | Test framework |
+| `ruff` | >=0.15.13 | Linting and formatting |
 
 Install with: `pip install -e ".[dev]"`
 

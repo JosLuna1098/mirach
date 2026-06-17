@@ -45,11 +45,26 @@ python3 ~/mirach/install.py --yes
 
 ### After installation
 
-Run `opencode auth` to configure your LLM provider if you haven't already:
+Mirach uses the `opencode_serve` backend by default. Configure your LLM provider with:
 
 ```bash
 opencode auth
 ```
+
+If you prefer a fully local setup, switch to the `native` backend and point it at a local Ollama model — see the [configuration reference](../reference/configuration.md#native-backend).
+
+### Local configuration with mirach.env
+
+Settings live in `mirach.env` at the project root (loaded automatically by `run_daemon.sh`). The installer creates it for you. A typical file:
+
+```bash
+MIRACH_VOICE=daniela.onnx
+MIRACH_LOCALE=es
+MIRACH_WHISPER_LANG=es
+MIRACH_SERVER_HOST=0.0.0.0
+```
+
+`MIRACH_SERVER_HOST=0.0.0.0` makes the HTTP server reachable from the [Android app](mobile-app.md). See the [configuration reference](../reference/configuration.md) for every variable.
 
 ## Step 2: Understand the hotkey workflow
 
@@ -133,9 +148,10 @@ The system prompt controls:
 
 ## What's next?
 
+- Set up the [Android companion app](mobile-app.md) to drive Mirach from your phone
 - **How-to guides** for specific tasks: adding user scripts, changing voices, troubleshooting
-- **Reference** for all configuration options
-- **Explanation** of how the architecture works
+- **Reference** for all configuration options, the architecture, and the HTTP/SSE API
+- **Explanation** of the design decisions behind Mirach
 
 ## Common issues during setup
 

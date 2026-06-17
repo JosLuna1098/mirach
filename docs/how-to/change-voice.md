@@ -16,13 +16,17 @@ curl -L -o en_US-lessac-medium.onnx.json \
 
 ## Configure the voice
 
-Set the `MIRACH_VOICE` environment variable in your systemd service:
+Set `MIRACH_VOICE` to the new filename. Edit `mirach.env` at the project root:
+
+```bash
+MIRACH_VOICE=en_US-lessac-medium.onnx
+```
+
+Or, if you run via systemd, add it to the service:
 
 ```bash
 systemctl --user edit mirach
 ```
-
-Add:
 
 ```ini
 [Service]
@@ -33,6 +37,8 @@ Then restart:
 
 ```bash
 systemctl --user restart mirach
+# or, if launching manually:
+./run_daemon.sh
 ```
 
 ## Adjust voice speed
@@ -43,7 +49,7 @@ The `MIRACH_VOICE_SPEED` variable controls the `length_scale` parameter:
 - `<1` = faster speech
 - Default is `1.2`
 
-```ini
-[Service]
-Environment=MIRACH_VOICE_SPEED=1.0
+```bash
+# mirach.env
+MIRACH_VOICE_SPEED=1.0
 ```
