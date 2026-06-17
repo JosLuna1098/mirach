@@ -8,12 +8,16 @@ on:
 
 jobs:
   test:
+    # Mirach is a Linux-only daemon (systemd, notify-send, CUDA) reached over a
+    # local network by the web widget and the Android app. Windows/macOS were
+    # dropped from the matrix: their only failures were CRLF/path artifacts
+    # irrelevant to the supported platform.
     name: ${{ matrix.os }} / py${{ matrix.python }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest]
         python: ["3.11", "3.12"]
 
     steps:
