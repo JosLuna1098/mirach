@@ -195,9 +195,7 @@ def _deny_hit(command: str, pattern: str) -> bool:
             return False
         before_ok = idx == 0 or command[idx - 1] in _HARD_SEP
         end = idx + len(pattern)
-        after_ok = (
-            trailing_boundary or end == len(command) or command[end] in _AFTER_BOUNDARY
-        )
+        after_ok = trailing_boundary or end == len(command) or command[end] in _AFTER_BOUNDARY
         if before_ok and after_ok:
             return True
         start = idx + 1
