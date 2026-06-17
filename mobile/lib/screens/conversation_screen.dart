@@ -306,6 +306,7 @@ class _ConversationScreenState extends State<ConversationScreen>
 
   Future<void> _onAppBackground() async {
     _savedSince = _sse.since;
+    final l10n = lookupAppLocalizations(localeNotifier.value);
 
     // Shut down the UI SSE synchronously before any async gap.
     _sub?.cancel();
@@ -315,10 +316,11 @@ class _ConversationScreenState extends State<ConversationScreen>
     _sse.dispose();
     _sse = SseClient(); // fresh placeholder — safe for dispose() to call
 
-    // Persist credentials for the TaskHandler background isolate.
+    // Persist credentials and language for the TaskHandler background isolate.
     await FlutterForegroundTask.saveData(key: 'base_url', value: widget.baseUrl);
     await FlutterForegroundTask.saveData(key: 'token', value: widget.token);
     await FlutterForegroundTask.saveData(key: 'since', value: _savedSince.toString());
+    await FlutterForegroundTask.saveData(key: 'lang', value: localeNotifier.value.languageCode);
 
     // Bail if the user came back while we were awaiting above.
     if (!_inBackground) return;
@@ -326,12 +328,10 @@ class _ConversationScreenState extends State<ConversationScreen>
     // Start the service regardless of notification permission — on Android 13+
     // it runs even when the notification can't be shown (it's just suppressed).
     // The denied-permission warning is handled on resume, not here.
-    // NOTE: notification text is intentionally fixed English — the background
-    // isolate has no BuildContext. See TODO in foreground_task_handler.dart.
     await FlutterForegroundTask.startService(
       serviceId: 2601,
       notificationTitle: 'Mirach',
-      notificationText: 'Tap to return',
+      notificationText: l10n.notifTapToReturn,
       notificationButtons: [],
       notificationInitialRoute: '/',
       callback: startCallback,

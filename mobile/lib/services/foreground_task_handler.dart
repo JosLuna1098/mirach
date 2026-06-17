@@ -1,7 +1,9 @@
 import 'dart:async';
 
+import 'package:flutter/widgets.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
+import '../l10n/app_localizations.dart';
 import 'mirach_api.dart';
 import 'sse_client.dart';
 
@@ -15,13 +17,17 @@ class MirachTaskHandler extends TaskHandler {
   MirachApi? _api;
   StreamSubscription<Map<String, dynamic>>? _sub;
   String? _pendingToolCallId;
+  late AppLocalizations _l10n;
 
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
     final baseUrl = await FlutterForegroundTask.getData(key: 'base_url') as String?;
     final token = await FlutterForegroundTask.getData(key: 'token') as String?;
     final sinceStr = await FlutterForegroundTask.getData(key: 'since') as String?;
+    final langCode = await FlutterForegroundTask.getData(key: 'lang') as String? ?? 'en';
     final since = int.tryParse(sinceStr ?? '0') ?? 0;
+
+    _l10n = lookupAppLocalizations(Locale(langCode));
 
     if (baseUrl == null || token == null) return;
 
@@ -31,12 +37,8 @@ class MirachTaskHandler extends TaskHandler {
     _sub = _sse!.events.listen(
       _handleEvent,
       onError: (e) {
-        // TODO: localize background notifications in v2 — pass mirach_lang via
-        // saveData (already used for credentials) and resolve strings with
-        // lookupAppLocalizations(Locale(code)) from gen-l10n, which works
-        // without a BuildContext.
         if (e.toString().contains('invalid_token')) {
-          _setError('Invalid token — reopen the app to reconnect');
+          _setError(_l10n.notifInvalidToken);
         }
       },
     );
@@ -55,16 +57,15 @@ class MirachTaskHandler extends TaskHandler {
         _setWorking();
       case 'awaiting_confirmation':
         _pendingToolCallId = ev['tool_call_id'] as String?;
-        final toolName = ev['name'] as String? ?? 'tool';
+        final toolName = ev['name'] as String? ?? _l10n.notifToolFallback;
         unawaited(
           FlutterForegroundTask.updateService(
             notificationTitle: 'Mirach',
-            // TODO: localize in v2 — see TODO in onStart above.
-            notificationText: '⚠ Confirm: $toolName',
+            notificationText: _l10n.confirmTitle(toolName),
             notificationButtons: [
-              const NotificationButton(id: 'approve', text: 'Approve'),
-              const NotificationButton(id: 'deny', text: 'Deny'),
-              const NotificationButton(id: 'stop', text: 'Stop'),
+              NotificationButton(id: 'approve', text: _l10n.notifApprove),
+              NotificationButton(id: 'deny', text: _l10n.notifDeny),
+              NotificationButton(id: 'stop', text: _l10n.notifStop),
             ],
           ),
         );
@@ -84,10 +85,9 @@ class MirachTaskHandler extends TaskHandler {
     unawaited(
       FlutterForegroundTask.updateService(
         notificationTitle: 'Mirach',
-        // TODO: localize in v2 — see TODO in onStart above.
-        notificationText: 'Working…',
+        notificationText: _l10n.notifWorking,
         notificationButtons: [
-          const NotificationButton(id: 'stop', text: 'Stop'),
+          NotificationButton(id: 'stop', text: _l10n.notifStop),
         ],
       ),
     );
@@ -97,8 +97,7 @@ class MirachTaskHandler extends TaskHandler {
     unawaited(
       FlutterForegroundTask.updateService(
         notificationTitle: 'Mirach',
-        // TODO: localize in v2 — see TODO in onStart above.
-        notificationText: 'Tap to return',
+        notificationText: _l10n.notifTapToReturn,
         notificationButtons: [],
       ),
     );
@@ -107,7 +106,7 @@ class MirachTaskHandler extends TaskHandler {
   void _setError(String msg) {
     unawaited(
       FlutterForegroundTask.updateService(
-        notificationTitle: '⚠ Mirach — error',
+        notificationTitle: _l10n.notifErrorTitle,
         notificationText: msg,
         notificationButtons: [],
       ),

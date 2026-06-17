@@ -403,6 +403,54 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Pairing failed: {error}'**
   String pairingFailed(String error);
+
+  /// No description provided for @notifWorking.
+  ///
+  /// In en, this message translates to:
+  /// **'Mirach is working…'**
+  String get notifWorking;
+
+  /// No description provided for @notifTapToReturn.
+  ///
+  /// In en, this message translates to:
+  /// **'Tap to return'**
+  String get notifTapToReturn;
+
+  /// No description provided for @notifApprove.
+  ///
+  /// In en, this message translates to:
+  /// **'Approve'**
+  String get notifApprove;
+
+  /// No description provided for @notifDeny.
+  ///
+  /// In en, this message translates to:
+  /// **'Deny'**
+  String get notifDeny;
+
+  /// No description provided for @notifStop.
+  ///
+  /// In en, this message translates to:
+  /// **'Stop'**
+  String get notifStop;
+
+  /// No description provided for @notifErrorTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'⚠ Mirach — error'**
+  String get notifErrorTitle;
+
+  /// No description provided for @notifInvalidToken.
+  ///
+  /// In en, this message translates to:
+  /// **'Invalid token — reopen the app to reconnect'**
+  String get notifInvalidToken;
+
+  /// No description provided for @notifToolFallback.
+  ///
+  /// In en, this message translates to:
+  /// **'tool'**
+  String get notifToolFallback;
 }
 
 class _AppLocalizationsDelegate

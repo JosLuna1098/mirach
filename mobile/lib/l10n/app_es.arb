@@ -51,5 +51,14 @@
   "hostLabel": "Dirección de la PC (host:puerto)",
   "codeLabel": "Código de emparejamiento",
   "connectButton": "Conectar",
-  "pairingFailed": "Error de emparejamiento: {error}"
+  "pairingFailed": "Error de emparejamiento: {error}",
+
+  "notifWorking": "Mirach está trabajando…",
+  "notifTapToReturn": "Toca para volver",
+  "notifApprove": "Aprobar",
+  "notifDeny": "Denegar",
+  "notifStop": "Parar",
+  "notifErrorTitle": "⚠ Mirach — error",
+  "notifInvalidToken": "Token inválido — abre la app para reconectar",
+  "notifToolFallback": "herramienta"
 }

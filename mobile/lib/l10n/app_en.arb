@@ -84,5 +84,14 @@
     "placeholders": {
       "error": { "type": "String" }
     }
-  }
+  },
+
+  "notifWorking": "Mirach is working…",
+  "notifTapToReturn": "Tap to return",
+  "notifApprove": "Approve",
+  "notifDeny": "Deny",
+  "notifStop": "Stop",
+  "notifErrorTitle": "⚠ Mirach — error",
+  "notifInvalidToken": "Invalid token — reopen the app to reconnect",
+  "notifToolFallback": "tool"
 }

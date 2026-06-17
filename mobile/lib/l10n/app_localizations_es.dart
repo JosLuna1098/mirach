@@ -176,4 +176,29 @@ class AppLocalizationsEs extends AppLocalizations {
   String pairingFailed(String error) {
     return 'Error de emparejamiento: $error';
   }
+
+  @override
+  String get notifWorking => 'Mirach está trabajando…';
+
+  @override
+  String get notifTapToReturn => 'Toca para volver';
+
+  @override
+  String get notifApprove => 'Aprobar';
+
+  @override
+  String get notifDeny => 'Denegar';
+
+  @override
+  String get notifStop => 'Parar';
+
+  @override
+  String get notifErrorTitle => '⚠ Mirach — error';
+
+  @override
+  String get notifInvalidToken =>
+      'Token inválido — abre la app para reconectar';
+
+  @override
+  String get notifToolFallback => 'herramienta';
 }
