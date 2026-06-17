@@ -1,0 +1,76 @@
+name: Build & Release APK
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'mobile/pubspec.yaml'
+  workflow_dispatch:
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+    defaults:
+      run:
+        working-directory: mobile
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      # Rebuild the release keystore from Secrets so the APK is signed with the
+      # real key. key.properties.storeFile is relative to android/app/ in CI.
+      - name: Restore release keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > android/app/release.jks
+          cat > android/key.properties <<EOF
+          storePassword=$KEYSTORE_PASSWORD
+          keyPassword=$KEY_PASSWORD
+          keyAlias=$KEY_ALIAS
+          storeFile=release.jks
+          EOF
+
+      - run: flutter pub get
+
+      # --split-per-abi: one APK per architecture (~1/3 the size of a universal APK).
+      - run: flutter build apk --release --split-per-abi
+
+      # arm64-v8a covers all modern Android phones (64-bit, standard for Android 10+).
+      - name: Rename arm64 APK for download
+        run: cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk build/app/outputs/flutter-apk/mirach.apk
+
+      # Create a versioned GitHub Release only when the version tag is new.
+      # If the tag already exists the push didn't bump the version — no release.
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(grep '^version:' pubspec.yaml | sed 's/version:[[:space:]]*//' | cut -d'+' -f1)
+          TAG="v$VERSION"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists — pubspec.yaml was modified but version was not bumped."
+          else
+            gh release create "$TAG" \
+              build/app/outputs/flutter-apk/app-arm64-v8a-release.apk \
+              build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk \
+              build/app/outputs/flutter-apk/app-x86_64-release.apk \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "Mirach Mobile $VERSION" \
+              --notes "Android APK for Mirach Mobile $VERSION.
+
+**Install**: download \`app-arm64-v8a-release.apk\` (recommended for all modern phones).
+
+**Pairing**: start the PC daemon with \`MIRACH_SERVER_HOST=0.0.0.0 ./run_daemon.sh\`, open the app, enter the PC's IP:7270 and the pairing code shown in the daemon logs."
+          fi
