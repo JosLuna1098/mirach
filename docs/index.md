@@ -38,6 +38,18 @@ The LLM runs inside an agentic loop: it can call tools (shell, file access, web 
 - **Bilingual** — English and Spanish across the desktop UI and the Android app
 - **Two backends** — OpenCode CLI (default) or a native loop against a local model
 
+## Three ways to use it
+
+The same daemon and conversation are reachable three ways — they cover different situations rather than replacing each other:
+
+| Interface | When it fits |
+|---|---|
+| **Hotkey** (`Alt+Z`) | Quick, hands-on-keyboard questions with a short spoken answer |
+| **[Web widget](how-to/web-widget.md)** | Reading long answers, copying a command, watching tools run and approving them |
+| **[Android app](tutorial/mobile-app.md)** | Driving the PC from across the room and approving sensitive actions remotely |
+
+A turn started by voice shows up in the widget and the app; a turn typed on the phone is spoken by the PC. See [Interfaces and use cases](explanation/use-cases.md) for concrete scenarios.
+
 ## Download
 
 - **Source / installer**: [github.com/JosLuna1098/mirach](https://github.com/JosLuna1098/mirach)

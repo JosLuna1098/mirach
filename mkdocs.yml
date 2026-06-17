@@ -63,6 +63,7 @@ nav:
       - Get Started: tutorial/get-started.md
       - Android App: tutorial/mobile-app.md
   - How-to Guides:
+      - Web Widget: how-to/web-widget.md
       - User Scripts: how-to/user-scripts.md
       - Change Voice: how-to/change-voice.md
       - Change Whisper Model: how-to/change-whisper-model.md
@@ -78,6 +79,7 @@ nav:
       - IPC Protocol: reference/ipc.md
       - User Scripts Format: reference/user-scripts-format.md
   - Explanation:
+      - Interfaces and Use Cases: explanation/use-cases.md
       - Design Decisions: explanation/design-decisions.md
 
 extra:
