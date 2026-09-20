@@ -111,7 +111,8 @@ OPENCODE_SERVE_MODEL_ID = _env("MIRACH_OPENCODE_SERVE_MODEL_ID", "")
 # Diagnostic: if set to a path, launch opencode serve with --print-logs and tee
 # its stdout to that file (captures what opencode does during a hang). Empty = off.
 OPENCODE_SERVE_LOG = _env("MIRACH_OPENCODE_SERVE_LOG", "")
-# Path (or bare name) of the opencode binary — override when opencode is not on PATH.
+# Path (or bare name) of the opencode binary — override when opencode is not on
+# PATH. Must be opencode >= 2.0: Mirach speaks the v2 API (/api/*, basic auth).
 OPENCODE_BIN = _env("MIRACH_OPENCODE_BIN", "opencode")
 # Policy file is shared with the native backend; set MIRACH_NATIVE_POLICY to override.
 

@@ -8,6 +8,7 @@ import datetime
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -155,6 +156,12 @@ def _validate_opencode_bin(bin_path: str) -> tuple[bool, str]:
         return False, f"'{resolved} --version' timed out"
     except FileNotFoundError:
         return False, f"opencode not found: {resolved}"
+    # Mirach speaks the opencode 2.x API (/api/*, basic auth, new event names).
+    # A v1 binary would fail at runtime with a bare 404, so reject it here.
+    out = (r.stdout or b"").decode("utf-8", "replace").strip()
+    m = re.search(r"(\d+)\.", out)
+    if m and int(m.group(1)) < 2:
+        return False, f"Mirach requires opencode >= 2.0 (found {out})"
     return True, resolved
 
 
@@ -238,10 +245,13 @@ def _safe_tar_member(name: str) -> bool:
 
 
 def _install_skills_to_opencode(skills_src: Path) -> None:
-    """Copy skills_src/* to ~/.config/opencode/skills/ and update opencode.json."""
+    """Copy skills_src/* to ~/.config/opencode/skills/.
+
+    No config edit is needed: opencode 2.x auto-discovers that directory
+    (verified against 2.0.5). The v1 `skills.paths` key no longer exists.
+    """
     home = _get_opencode_home()
     opencode_skills_dir = home / ".config" / "opencode" / "skills"
-    opencode_config = home / ".config" / "opencode" / "opencode.json"
 
     opencode_skills_dir.mkdir(parents=True, exist_ok=True)
     for src_file in sorted(skills_src.rglob("*")):
@@ -251,21 +261,6 @@ def _install_skills_to_opencode(skills_src: Path) -> None:
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src_file, dest)
 
-    opencode_config.parent.mkdir(parents=True, exist_ok=True)
-    if opencode_config.exists():
-        try:
-            cfg = json.loads(opencode_config.read_text())
-        except (json.JSONDecodeError, OSError):
-            cfg = {}
-    else:
-        cfg = {"$schema": "https://opencode.ai/config.json"}
-
-    cfg.setdefault("skills", {}).setdefault("paths", [])
-    sp = str(opencode_skills_dir)
-    if sp not in cfg["skills"]["paths"]:
-        cfg["skills"]["paths"].append(sp)
-
-    opencode_config.write_text(json.dumps(cfg, indent=2) + "\n")
     print(f"  Skills installed → {opencode_skills_dir}")
 
 

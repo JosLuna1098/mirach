@@ -35,7 +35,6 @@ VOICES_DIR = REPO_DIR / "voices"
 SKILLS_SRC = REPO_DIR / "skills"
 USER_SCRIPTS_DIR = REPO_DIR / "user_scripts"
 OPENCODE_SKILLS_DIR = Path.home() / ".config" / "opencode" / "skills"
-OPENCODE_CONFIG = Path.home() / ".config" / "opencode" / "opencode.json"
 
 PIPER_VOICES: list[tuple[str, str, str, str]] = [
     # (display, filename, hf_url, lang)
@@ -1103,32 +1102,6 @@ def _inject_variables(content: str, tvars: dict) -> str:
     return content
 
 
-def _update_opencode_config(skills_path: str) -> None:
-    """Add or update skills.paths in the user's opencode.json."""
-    import json
-
-    OPENCODE_CONFIG.parent.mkdir(parents=True, exist_ok=True)
-
-    if OPENCODE_CONFIG.exists():
-        try:
-            cfg = json.loads(OPENCODE_CONFIG.read_text())
-        except (json.JSONDecodeError, OSError):
-            cfg = {}
-    else:
-        cfg = {"$schema": "https://opencode.ai/config.json"}
-
-    if "skills" not in cfg:
-        cfg["skills"] = {}
-    if "paths" not in cfg["skills"]:
-        cfg["skills"]["paths"] = []
-
-    if skills_path not in cfg["skills"]["paths"]:
-        cfg["skills"]["paths"].append(skills_path)
-
-    OPENCODE_CONFIG.write_text(json.dumps(cfg, indent=2) + "\n")
-    ok(f"opencode.json updated with skills path: {skills_path}")
-
-
 def step_skills(tvars: dict, selected: list[str], total: int) -> None:
     banner(11, total, "Installing OpenCode skills")
 
@@ -1160,7 +1133,7 @@ def step_skills(tvars: dict, selected: list[str], total: int) -> None:
         installed += 1
 
     if installed > 0:
-        _update_opencode_config(str(OPENCODE_SKILLS_DIR))
+        # No config edit: opencode 2.x auto-discovers ~/.config/opencode/skills/.
         ok(f"{installed} skills installed to {OPENCODE_SKILLS_DIR}")
         print(f"\n  {blue('💡')} You can add your own skills in {SKILLS_SRC}/")
         print("     Drop a <name>/SKILL.md file there and re-run the installer to activate it.")
