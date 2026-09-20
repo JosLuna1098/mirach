@@ -50,7 +50,7 @@ Two backends implement the `LLMBackend` protocol (`llm_types.py`). Select via `M
 
 **`opencode_serve` (default)** — `mirach/harness/providers/opencode.py`
 
-Spawns and supervises `opencode serve`. Creates or reuses a session, translates the SSE event stream (`message.part.delta`, `permission.updated`, `session.idle`) into `ConversationBus` events, and enforces `PolicyEngine` on every `permission.updated`. Session resets after `MIRACH_SESSION_IDLE_TIMEOUT` idle seconds.
+Requires **opencode >= 2.0** (v2 API: routes under `/api`, mandatory basic auth, directory in the `x-opencode-directory` header). Spawns and supervises `opencode serve`. Creates or reuses a session — carrying its own permission rules and model, so the harness does not depend on `opencode.json` resolving from the cwd — translates the global SSE event stream (`session.text.delta`, `session.tool.*`, `permission.asked`, `session.execution.*`) into `ConversationBus` events, and enforces `PolicyEngine` on every `permission.asked`. Session resets after `MIRACH_SESSION_IDLE_TIMEOUT` idle seconds.
 
 **`native`** — `mirach/harness/native_backend.py`
 
@@ -58,7 +58,7 @@ Runs a full inner tool-use REPL against any OpenAI-compatible endpoint (Ollama, 
 
 ## Policy engine — `mirach/harness/policy/`
 
-`PolicyEngine` evaluates every tool call before execution against `policy.yaml`. Rules are `allow` or `deny` with glob patterns on tool name and arguments. Matched `deny` rules block execution and surface a `permission.updated` event with `status: denied`. Unmatched calls that require confirmation trigger `status: awaiting_confirmation`.
+`PolicyEngine` evaluates every tool call before execution against `policy.yaml`. Rules are `allow` or `deny` with glob patterns on tool name and arguments. Matched `deny` rules block execution and surface an `error` event on the bus. Unmatched calls that require confirmation trigger an `awaiting_confirmation` event.
 
 ## ConversationBus — `mirach/harness/events.py`
 

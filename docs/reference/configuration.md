@@ -49,7 +49,7 @@ Precedence (highest → lowest): shell environment → `mirach.env` → built-in
 
 | Variable | Default | Description |
 |---|---|---|
-| `MIRACH_OPENCODE_BIN` | `opencode` | Path or name of the `opencode` binary. |
+| `MIRACH_OPENCODE_BIN` | `opencode` | Path or name of the `opencode` binary. **Must be opencode >= 2.0** — Mirach speaks the v2 API. |
 | `MIRACH_OPENCODE_SERVE_HOST` | `127.0.0.1` | Address where `opencode serve` listens. |
 | `MIRACH_OPENCODE_SERVE_PORT` | `0` | Port for `opencode serve` (0 = random free port). |
 | `MIRACH_OPENCODE_SERVE_PROVIDER_ID` | _(empty)_ | Provider to pass to `opencode serve`. Empty = opencode's configured default. |

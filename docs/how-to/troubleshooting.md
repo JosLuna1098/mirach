@@ -43,7 +43,7 @@ opencode run "hello"
 opencode auth
 ```
 
-The default backend (`opencode_serve`) spawns and supervises an `opencode serve` subprocess. If turns hang, confirm the `opencode` binary is on `PATH` and authenticated. The provider and model come from opencode's own config unless you override them with `MIRACH_OPENCODE_SERVE_PROVIDER_ID` / `MIRACH_OPENCODE_SERVE_MODEL_ID`.
+The default backend (`opencode_serve`) spawns and supervises an `opencode serve` subprocess and talks to its v2 API. If turns hang, confirm the `opencode` binary is on `PATH`, is **version 2.0 or newer** (`opencode --version`), and is authenticated. A v1 binary is rejected at startup with `Mirach requires opencode >= 2.0`. The provider and model come from opencode's own config unless you override them with `MIRACH_OPENCODE_SERVE_PROVIDER_ID` / `MIRACH_OPENCODE_SERVE_MODEL_ID`.
 
 ## "Daemon is not running" notification
 

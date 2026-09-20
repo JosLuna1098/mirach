@@ -49,7 +49,7 @@ Precedencia (de mayor a menor): entorno del shell → `mirach.env` → valores p
 
 | Variable | Por defecto | Descripción |
 |---|---|---|
-| `MIRACH_OPENCODE_BIN` | `opencode` | Ruta o nombre del binario `opencode`. |
+| `MIRACH_OPENCODE_BIN` | `opencode` | Ruta o nombre del binario `opencode`. **Debe ser opencode >= 2.0** — Mirach habla la API v2. |
 | `MIRACH_OPENCODE_SERVE_HOST` | `127.0.0.1` | Dirección donde escucha `opencode serve`. |
 | `MIRACH_OPENCODE_SERVE_PORT` | `0` | Puerto de `opencode serve` (0 = puerto libre aleatorio). |
 | `MIRACH_OPENCODE_SERVE_PROVIDER_ID` | _(vacío)_ | Proveedor a pasar a `opencode serve`. Vacío = el configurado en opencode. |

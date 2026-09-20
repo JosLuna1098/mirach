@@ -50,7 +50,7 @@ Dos backends implementan el protocolo `LLMBackend` (`llm_types.py`). Se seleccio
 
 **`opencode_serve` (por defecto)** — `mirach/harness/providers/opencode.py`
 
-Lanza y supervisa `opencode serve`. Crea o reutiliza una sesión, traduce el flujo de eventos SSE (`message.part.delta`, `permission.updated`, `session.idle`) a eventos de `ConversationBus`, y aplica `PolicyEngine` en cada `permission.updated`. La sesión se reinicia tras `MIRACH_SESSION_IDLE_TIMEOUT` segundos de inactividad.
+Requiere **opencode >= 2.0** (API v2: rutas bajo `/api`, autenticación básica obligatoria, directorio en la cabecera `x-opencode-directory`). Lanza y supervisa `opencode serve`. Crea o reutiliza una sesión —que lleva sus propias reglas de permisos y su modelo, para no depender de que `opencode.json` se resuelva desde el cwd—, traduce el flujo global de eventos SSE (`session.text.delta`, `session.tool.*`, `permission.asked`, `session.execution.*`) a eventos de `ConversationBus`, y aplica `PolicyEngine` en cada `permission.asked`. La sesión se reinicia tras `MIRACH_SESSION_IDLE_TIMEOUT` segundos de inactividad.
 
 **`native`** — `mirach/harness/native_backend.py`
 
@@ -58,7 +58,7 @@ Corre un REPL interno completo de uso de herramientas contra cualquier endpoint 
 
 ## Motor de políticas — `mirach/harness/policy/`
 
-`PolicyEngine` evalúa cada llamada de herramienta antes de ejecutarla contra `policy.yaml`. Las reglas son `allow` o `deny` con patrones glob sobre el nombre de la herramienta y los argumentos. Las reglas `deny` que coinciden bloquean la ejecución y emiten un evento `permission.updated` con `status: denied`. Las llamadas sin coincidencia que requieren confirmación disparan `status: awaiting_confirmation`.
+`PolicyEngine` evalúa cada llamada de herramienta antes de ejecutarla contra `policy.yaml`. Las reglas son `allow` o `deny` con patrones glob sobre el nombre de la herramienta y los argumentos. Las reglas `deny` que coinciden bloquean la ejecución y emiten un evento `error` en el bus. Las llamadas sin coincidencia que requieren confirmación disparan un evento `awaiting_confirmation`.
 
 ## ConversationBus — `mirach/harness/events.py`
 
