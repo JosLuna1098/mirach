@@ -333,15 +333,36 @@ def _make_sse_bytes(*events: dict) -> bytes:
     return out
 
 
-def _text_delta(part_id: str, delta: str, session_id: str = "sess-1") -> dict:
+def _text_delta(msg_id: str, delta: str, session_id: str = "sess-1") -> dict:
     return {
-        "type": "message.part.delta",
-        "properties": {"sessionID": session_id, "partID": part_id, "field": "text", "delta": delta},
+        "id": "evt_1",
+        "type": "session.text.delta",
+        "created": 0,
+        "data": {
+            "sessionID": session_id,
+            "assistantMessageID": msg_id,
+            "ordinal": 0,
+            "delta": delta,
+        },
     }
 
 
-def _session_idle(session_id: str = "sess-1") -> dict:
-    return {"type": "session.idle", "properties": {"sessionID": session_id}}
+def _exec_started(session_id: str = "sess-1") -> dict:
+    return {
+        "id": "evt_0",
+        "type": "session.execution.started",
+        "created": 0,
+        "data": {"sessionID": session_id},
+    }
+
+
+def _exec_succeeded(session_id: str = "sess-1") -> dict:
+    return {
+        "id": "evt_2",
+        "type": "session.execution.succeeded",
+        "created": 0,
+        "data": {"sessionID": session_id},
+    }
 
 
 class _FakeResp:
@@ -391,8 +412,9 @@ def test_opencode_compact_fires_when_over_budget():
     backend = _make_backend()
 
     sse_body = _make_sse_bytes(
-        _text_delta("p1", "hello"),
-        _session_idle(),
+        _exec_started(),
+        _text_delta("m1", "hello"),
+        _exec_succeeded(),
     )
     with (
         patch("mirach.config.CONTEXT_STRATEGY", "summarize"),
@@ -413,8 +435,9 @@ def test_opencode_compact_not_fired_when_under_budget():
     backend = _make_backend()
 
     sse_body = _make_sse_bytes(
-        _text_delta("p1", "reply"),
-        _session_idle(),
+        _exec_started(),
+        _text_delta("m1", "reply"),
+        _exec_succeeded(),
     )
     with (
         patch("mirach.config.CONTEXT_STRATEGY", "summarize"),
@@ -435,8 +458,9 @@ def test_opencode_compact_not_fired_for_none_strategy():
     backend = _make_backend(session_tokens=999_999)
 
     sse_body = _make_sse_bytes(
-        _text_delta("p1", "reply"),
-        _session_idle(),
+        _exec_started(),
+        _text_delta("m1", "reply"),
+        _exec_succeeded(),
     )
     with (
         patch("mirach.config.CONTEXT_STRATEGY", "none"),
@@ -476,10 +500,17 @@ def test_opencode_compact_does_not_reset_on_failure():
 def test_opencode_fetch_session_tokens_reads_last_assistant():
     """_fetch_session_tokens returns the last assistant message's input+output."""
     backend = _make_backend()
-    messages = [
-        {"info": {"role": "user", "tokens": None}},
-        {"info": {"role": "assistant", "tokens": {"input": 4000, "output": 200, "reasoning": 0}}},
-    ]
+    messages = {
+        "data": [
+            {
+                "id": "msg-1",
+                "type": "assistant",
+                "content": [{"type": "text", "text": "hi"}],
+                "tokens": {"input": 4000, "output": 200, "reasoning": 0},
+            }
+        ],
+        "cursor": {},
+    }
     with patch.object(backend, "_http_get", return_value=messages):
         assert backend._fetch_session_tokens() == 4200
 
@@ -496,8 +527,9 @@ def test_opencode_query_refreshes_tokens_from_rest():
     backend = _make_backend(session_tokens=0)
 
     sse_body = _make_sse_bytes(
-        _text_delta("p1", "answer"),
-        _session_idle(),
+        _exec_started(),
+        _text_delta("m1", "answer"),
+        _exec_succeeded(),
     )
     with (
         patch("mirach.config.CONTEXT_STRATEGY", "summarize"),

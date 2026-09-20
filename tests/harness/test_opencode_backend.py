@@ -1,7 +1,13 @@
-"""Tests for OpenCodeServeBackend — mocked SSE stream, no real opencode server."""
+"""Tests for OpenCodeServeBackend — mocked SSE stream, no real opencode server.
+
+Everything here speaks the opencode 2.x wire protocol: routes under /api, an
+event envelope of {id, type, created, data}, and REST payloads wrapped in
+{"data": [...], "cursor": {...}}.
+"""
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import io
 import json
@@ -22,6 +28,7 @@ from mirach.harness.events import (
 )
 from mirach.harness.policy.engine import Decision, PolicyEngine
 from mirach.harness.providers.opencode import (
+    _SESSION_RULES,
     OpenCodeServeBackend,
     _opencode_type_to_policy_tool,
     _parse_sse,
@@ -38,21 +45,51 @@ def _make_sse_bytes(*events: dict) -> bytes:
     return out
 
 
-def _text_delta(part_id: str, delta: str, session_id: str = "sess-1") -> dict:
-    """Build a message.part.delta event for text streaming (real API format)."""
+def _ev(etype: str, **data: object) -> dict:
+    """Build a v2 event envelope."""
+    return {"id": "evt_1", "type": etype, "created": 0, "data": data}
+
+
+def _text_delta(msg_id: str, ordinal: int, delta: str, session_id: str = "sess-1") -> dict:
+    return _ev(
+        "session.text.delta",
+        sessionID=session_id,
+        assistantMessageID=msg_id,
+        ordinal=ordinal,
+        delta=delta,
+    )
+
+
+def _text_ended(msg_id: str, ordinal: int, text: str, session_id: str = "sess-1") -> dict:
+    return _ev(
+        "session.text.ended",
+        sessionID=session_id,
+        assistantMessageID=msg_id,
+        ordinal=ordinal,
+        text=text,
+    )
+
+
+def _exec_started(session_id: str = "sess-1") -> dict:
+    return _ev("session.execution.started", sessionID=session_id)
+
+
+def _exec_succeeded(session_id: str = "sess-1") -> dict:
+    return _ev("session.execution.succeeded", sessionID=session_id)
+
+
+def _assistant_msg(content: list[dict], tokens: dict | None = None) -> dict:
     return {
-        "type": "message.part.delta",
-        "properties": {
-            "sessionID": session_id,
-            "partID": part_id,
-            "field": "text",
-            "delta": delta,
-        },
+        "id": "msg-1",
+        "type": "assistant",
+        "content": content,
+        "tokens": tokens
+        or {"input": 1, "output": 2, "reasoning": 0, "cache": {"read": 0, "write": 0}},
     }
 
 
-def _session_idle(session_id: str = "sess-1") -> dict:
-    return {"type": "session.idle", "properties": {"sessionID": session_id}}
+def _rest_messages(*messages: dict) -> dict:
+    return {"data": list(messages), "cursor": {}}
 
 
 class _FakeResp:
@@ -102,13 +139,14 @@ def _make_backend(
     policy: PolicyEngine | None = None,
     bus: ConversationBus | None = None,
 ) -> OpenCodeServeBackend:
-    """Return a backend with a pre-set URL and session (no subprocess)."""
+    """Return a backend with a pre-set URL, password and session (no subprocess)."""
     backend = OpenCodeServeBackend(
         policy=policy or PolicyEngine(),
         bus=bus or ConversationBus(),
         cwd="/tmp/test",
     )
     backend._base_url = "http://localhost:9999"
+    backend._password = "pw"
     backend._session_id = "sess-1"
     backend._last_interaction = time.time()  # prevent session_expired on first call
     return backend
@@ -118,14 +156,14 @@ def _mock_urlopen(sse_events: list[dict], rest_responses: dict[str, object] | No
     """
     Build a side_effect function for urllib.request.urlopen.
 
-    GET /event → FakeResp with SSE bytes.
+    GET /api/event → FakeResp with SSE bytes.
     Everything else → FakeResp with JSON from rest_responses[path] or {}.
     """
     rest = rest_responses or {}
 
     def _side_effect(req_or_url, timeout=None):
         url = req_or_url if isinstance(req_or_url, str) else req_or_url.full_url
-        if "/event" in url:
+        if "/api/event" in url:
             return _FakeResp(_make_sse_bytes(*sse_events))
         for key, payload in rest.items():
             if key in url:
@@ -136,21 +174,37 @@ def _mock_urlopen(sse_events: list[dict], rest_responses: dict[str, object] | No
     return _side_effect
 
 
+def _recorder(sse_events: list[dict], rest_responses: dict[str, object] | None = None):
+    """urlopen side effect that also records every (url, method, body) it sees."""
+    seen: list[tuple[str, str, dict | None, dict]] = []
+    inner = _mock_urlopen(sse_events, rest_responses)
+
+    def _side_effect(req_or_url, timeout=None):
+        if not isinstance(req_or_url, str):
+            body = None
+            if req_or_url.data:
+                with contextlib.suppress(Exception):
+                    body = json.loads(req_or_url.data)
+            seen.append(
+                (req_or_url.full_url, req_or_url.get_method(), body, dict(req_or_url.headers))
+            )
+        return inner(req_or_url, timeout)
+
+    return _side_effect, seen
+
+
 # ── _parse_sse unit tests ─────────────────────────────────────────────────────
 
 
 def test_parse_sse_basic():
-    ev = {"type": "session.idle", "properties": {"sessionID": "x"}}
+    ev = _exec_succeeded()
     resp = _FakeResp(_make_sse_bytes(ev))
     result = list(_parse_sse(resp, threading.Event()))
     assert result == [ev]
 
 
 def test_parse_sse_multiple_events():
-    events = [
-        _text_delta("p1", "Hi"),
-        _session_idle(),
-    ]
+    events = [_text_delta("m1", 0, "Hi"), _exec_succeeded()]
     resp = _FakeResp(_make_sse_bytes(*events))
     result = list(_parse_sse(resp, threading.Event()))
     assert result == events
@@ -159,8 +213,7 @@ def test_parse_sse_multiple_events():
 def test_parse_sse_stops_on_interrupt():
     interrupted = threading.Event()
     interrupted.set()
-    events = [_session_idle()]
-    resp = _FakeResp(_make_sse_bytes(*events))
+    resp = _FakeResp(_make_sse_bytes(_exec_succeeded()))
     result = list(_parse_sse(resp, interrupted))
     assert result == []
 
@@ -173,7 +226,7 @@ def test_parse_sse_ignores_malformed_json():
 
 
 def test_parse_sse_handles_crlf_line_endings():
-    ev = {"type": "session.idle", "properties": {"sessionID": "x"}}
+    ev = _exec_succeeded()
     crlf_bytes = b"data: " + json.dumps(ev).encode() + b"\r\n\r\n"
     resp = _FakeResp(crlf_bytes)
     result = list(_parse_sse(resp, threading.Event()))
@@ -186,16 +239,38 @@ def test_parse_sse_handles_crlf_line_endings():
 @pytest.mark.parametrize(
     "oc_type,expected",
     [
+        ("shell", "bash"),
         ("bash", "bash"),
         ("edit", "edit_file"),
         ("webfetch", "web_fetch"),
-        ("doom_loop", "bash"),
+        ("websearch", "web_search"),
         ("external_directory", "read_file"),
+        ("read", "read_file"),
         ("unknown_tool", "unknown_tool"),
     ],
 )
 def test_type_mapping(oc_type, expected):
     assert _opencode_type_to_policy_tool(oc_type) == expected
+
+
+# ── transport: auth headers and /api prefix ───────────────────────────────────
+
+
+def test_every_request_carries_auth_and_directory_headers():
+    """Auth is mandatory in v2; the cwd travels in x-opencode-directory."""
+    backend = _make_backend()
+    sse = [_exec_started(), _text_delta("m1", 0, "ok"), _exec_succeeded()]
+    side_effect, seen = _recorder(sse)
+
+    with patch("urllib.request.urlopen", side_effect=side_effect):
+        backend.query("hi", "")
+
+    assert seen, "no requests were made"
+    expected = "Basic " + base64.b64encode(b"opencode:pw").decode()
+    for url, _method, _body, headers in seen:
+        assert headers.get("Authorization") == expected
+        assert headers.get("X-opencode-directory") == "/tmp/test"
+        assert "/api/" in url
 
 
 # ── query: text streaming ─────────────────────────────────────────────────────
@@ -209,9 +284,10 @@ def test_query_text_streaming():
 
     backend = _make_backend(bus=bus)
     sse = [
-        _text_delta("p1", "Hello"),
-        _text_delta("p1", " world"),
-        _session_idle(),
+        _exec_started(),
+        _text_delta("m1", 0, "Hello"),
+        _text_delta("m1", 0, " world"),
+        _exec_succeeded(),
     ]
 
     with patch("urllib.request.urlopen", side_effect=_mock_urlopen(sse)):
@@ -224,135 +300,132 @@ def test_query_text_streaming():
     assert any(isinstance(e, DoneEvent) for e in received)
 
 
-def test_query_non_text_fields_are_ignored():
-    """Deltas with field != 'text' (e.g. tool input streaming) must not affect response."""
-    bus = ConversationBus()
-    received: list[object] = []
-    bus.subscribe(received.append)
-
-    backend = _make_backend(bus=bus)
-    sse = [
-        # Tool input delta — should be ignored for text accumulation
-        {
-            "type": "message.part.delta",
-            "properties": {
-                "sessionID": "sess-1",
-                "partID": "t1",
-                "field": "input",
-                "delta": '{"cmd":',
-            },
-        },
-        _text_delta("p1", "Done"),
-        _session_idle(),
-    ]
-
-    with patch("urllib.request.urlopen", side_effect=_mock_urlopen(sse)):
-        result = backend.query("hi", "")
-
-    assert result.response == "Done"
-    text_deltas = [e for e in received if isinstance(e, TextDeltaEvent)]
-    assert [e.delta for e in text_deltas] == ["Done"]
-
-
 def test_query_multiple_parts_concatenated():
-    """Deltas from different partIDs are concatenated in order."""
+    """Deltas from different (messageID, ordinal) parts are concatenated in order."""
     backend = _make_backend()
     sse = [
-        _text_delta("p1", "foo"),
-        _text_delta("p2", "bar"),
-        _session_idle(),
+        _exec_started(),
+        _text_delta("m1", 0, "foo"),
+        _text_delta("m1", 1, "bar"),
+        _exec_succeeded(),
     ]
     with patch("urllib.request.urlopen", side_effect=_mock_urlopen(sse)):
         result = backend.query("hi", "")
-    # part_texts = {"p1": "foo", "p2": "bar"} → joined: "foobar"
     assert result.response == "foobar"
 
 
-def test_query_final_text_from_rest_excludes_reasoning():
-    """The response comes from the REST message store's text parts, not the raw
-    stream — reasoning that leaked into streamed deltas is excluded."""
+def test_query_text_ended_overrides_accumulated_deltas():
+    """session.text.ended carries the whole part — deltas are ephemeral."""
     backend = _make_backend()
     sse = [
-        # Reasoning deltas arrive BEFORE any part.updated reveals their type
-        # (the real-world ordering that defeats live filtering).
-        _text_delta("pr", "Thinking hard about math... the answer is 8."),
-        _text_delta("pt", "8"),
-        _session_idle(),
+        _exec_started(),
+        _text_delta("m1", 0, "par"),
+        _text_ended("m1", 0, "partial fixed up"),
+        _exec_succeeded(),
     ]
-    rest = {
-        "/message": [
-            {"info": {"role": "user"}, "parts": [{"type": "text", "text": "4+4?"}]},
-            {
-                "info": {"role": "assistant"},
-                "parts": [
-                    {"type": "reasoning", "text": "Thinking hard about math... the answer is 8."},
-                    {"type": "text", "text": "8"},
-                ],
-            },
-        ]
-    }
-    with patch("urllib.request.urlopen", side_effect=_mock_urlopen(sse, rest)):
-        result = backend.query("4+4?", "")
-    assert result.response == "8"
+    with patch("urllib.request.urlopen", side_effect=_mock_urlopen(sse)):
+        result = backend.query("hi", "")
+    assert result.response == "partial fixed up"
 
 
-def test_query_reasoning_parts_excluded():
-    """Deltas belonging to a reasoning part never reach the response or the bus."""
+def test_query_reasoning_deltas_never_reach_the_bus():
+    """session.reasoning.* is a separate stream in v2 and must be ignored."""
     bus = ConversationBus()
     received: list[object] = []
     bus.subscribe(received.append)
 
     backend = _make_backend(bus=bus)
     sse = [
-        {
-            "type": "message.part.updated",
-            "properties": {"sessionID": "sess-1", "part": {"id": "pr", "type": "reasoning"}},
-        },
-        {
-            "type": "message.part.updated",
-            "properties": {"sessionID": "sess-1", "part": {"id": "pt", "type": "text"}},
-        },
-        _text_delta("pr", "I am thinking about math. "),
-        _text_delta("pt", "8"),
-        _session_idle(),
+        _exec_started(),
+        _ev(
+            "session.reasoning.delta",
+            sessionID="sess-1",
+            assistantMessageID="m1",
+            ordinal=0,
+            delta="I am thinking about math. ",
+        ),
+        _text_delta("m1", 1, "8"),
+        _exec_succeeded(),
     ]
     with patch("urllib.request.urlopen", side_effect=_mock_urlopen(sse)):
         result = backend.query("4+4?", "")
 
     assert result.response == "8"
-    deltas = [e.delta for e in received if isinstance(e, TextDeltaEvent)]
-    assert deltas == ["8"]
+    assert [e.delta for e in received if isinstance(e, TextDeltaEvent)] == ["8"]
 
 
-def test_query_tool_parts_publish_call_and_result_once():
-    """Tool part state transitions emit one tool_call and one tool_result."""
+def test_query_final_text_comes_from_rest():
+    """The REST message store is authoritative when it answers."""
+    backend = _make_backend()
+    sse = [_exec_started(), _text_delta("m1", 0, "streamed"), _exec_succeeded()]
+    rest = {
+        "/message": _rest_messages(
+            _assistant_msg([{"type": "text", "text": "from rest"}]),
+        )
+    }
+    with patch("urllib.request.urlopen", side_effect=_mock_urlopen(sse, rest)):
+        result = backend.query("4+4?", "")
+    assert result.response == "from rest"
+
+
+def test_query_ignores_events_from_other_sessions():
+    """The v2 event stream is global — foreign sessions must not leak in."""
     bus = ConversationBus()
     received: list[object] = []
     bus.subscribe(received.append)
 
     backend = _make_backend(bus=bus)
-
-    def tool_part(status: str, **state_extra) -> dict:
-        return {
-            "type": "message.part.updated",
-            "properties": {
-                "sessionID": "sess-1",
-                "part": {
-                    "id": "ptool",
-                    "type": "tool",
-                    "callID": "call-1",
-                    "tool": "bash",
-                    "state": {"status": status, "input": {"command": "ls"}, **state_extra},
-                },
-            },
-        }
-
     sse = [
-        tool_part("pending"),
-        tool_part("running"),
-        tool_part("completed", output="file1\nfile2", title="ls"),
-        _text_delta("pt", "Two files."),
-        _session_idle(),
+        _exec_started(),
+        _text_delta("mx", 0, "NOT MINE", session_id="other"),
+        _exec_succeeded("other"),
+        _text_delta("m1", 0, "mine"),
+        _exec_succeeded(),
+    ]
+    with patch("urllib.request.urlopen", side_effect=_mock_urlopen(sse)):
+        result = backend.query("hi", "")
+
+    assert result.response == "mine"
+    assert [e.delta for e in received if isinstance(e, TextDeltaEvent)] == ["mine"]
+
+
+def test_query_ignores_stale_terminal_before_turn_starts():
+    """A late terminal event from the previous turn must not end this one."""
+    backend = _make_backend()
+    sse = [
+        _ev("session.execution.interrupted", sessionID="sess-1", reason="user"),
+        _exec_started(),
+        _text_delta("m1", 0, "answer"),
+        _exec_succeeded(),
+    ]
+    with patch("urllib.request.urlopen", side_effect=_mock_urlopen(sse)):
+        result = backend.query("hi", "")
+    assert result.response == "answer"
+    assert not result.interrupted
+
+
+# ── query: tools ──────────────────────────────────────────────────────────────
+
+
+def test_query_tool_events_publish_call_and_result():
+    """input.started names the tool, called/success produce one pair of events."""
+    bus = ConversationBus()
+    received: list[object] = []
+    bus.subscribe(received.append)
+
+    backend = _make_backend(bus=bus)
+    sse = [
+        _exec_started(),
+        _ev("session.tool.input.started", sessionID="sess-1", id="call-1", name="shell"),
+        _ev("session.tool.called", sessionID="sess-1", id="call-1", input={"command": "ls"}),
+        _ev(
+            "session.tool.success",
+            sessionID="sess-1",
+            id="call-1",
+            content=[{"type": "text", "text": "file1\nfile2"}],
+        ),
+        _text_delta("m1", 0, "Two files."),
+        _exec_succeeded(),
     ]
     with patch("urllib.request.urlopen", side_effect=_mock_urlopen(sse)):
         result = backend.query("list files", "")
@@ -360,7 +433,7 @@ def test_query_tool_parts_publish_call_and_result_once():
     calls = [e for e in received if isinstance(e, ToolCallEvent)]
     results = [e for e in received if isinstance(e, ToolResultEvent)]
     assert len(calls) == 1
-    assert calls[0].name == "bash"
+    assert calls[0].name == "shell"
     assert calls[0].arguments == {"command": "ls"}
     assert len(results) == 1
     assert results[0].result == "file1\nfile2"
@@ -368,55 +441,68 @@ def test_query_tool_parts_publish_call_and_result_once():
     assert result.response == "Two files."
 
 
+def test_query_tool_failed_marks_error():
+    bus = ConversationBus()
+    received: list[object] = []
+    bus.subscribe(received.append)
+
+    backend = _make_backend(bus=bus)
+    sse = [
+        _exec_started(),
+        _ev("session.tool.input.started", sessionID="sess-1", id="call-1", name="shell"),
+        _ev("session.tool.called", sessionID="sess-1", id="call-1", input={"command": "ls"}),
+        _ev(
+            "session.tool.failed",
+            sessionID="sess-1",
+            id="call-1",
+            error={"type": "aborted", "message": "The user declined this tool call"},
+        ),
+        _text_delta("m1", 0, "ok"),
+        _exec_succeeded(),
+    ]
+    with patch("urllib.request.urlopen", side_effect=_mock_urlopen(sse)):
+        backend.query("list files", "")
+
+    results = [e for e in received if isinstance(e, ToolResultEvent)]
+    assert len(results) == 1
+    assert results[0].error
+    assert results[0].result == "The user declined this tool call"
+
+
 def test_query_publishes_tools_from_rest_when_stream_omits_them():
-    """opencode >=1.14 stops streaming message.part.updated (only session.status/
-    session.diff), so tool_call/tool_result must be recovered from the REST
-    message store after the turn — split across several assistant messages."""
+    """Tool parts missed by the stream are recovered from the REST message store."""
     bus = ConversationBus()
     received: list[object] = []
     bus.subscribe(received.append)
     backend = _make_backend(bus=bus)
 
-    # SSE stream carries NO tool parts — just status churn then idle.
-    sse = [
-        {"type": "session.status", "properties": {"sessionID": "sess-1", "status": "working"}},
-        {"type": "session.diff", "properties": {"sessionID": "sess-1", "diff": ""}},
-        _session_idle(),
-    ]
-    # The REST store splits the turn: msg#1 holds the tool, msg#2 the answer.
-    messages = [
-        {"info": {"role": "user"}, "parts": [{"type": "text", "text": "list /tmp"}]},
-        {
-            "info": {"role": "assistant"},
-            "parts": [
-                {"type": "reasoning", "text": "let me list"},
-                {
-                    "type": "tool",
-                    "callID": "call-1",
-                    "tool": "bash",
-                    "state": {
-                        "status": "completed",
-                        "input": {"command": "ls /tmp"},
-                        "output": "file1\nfile2",
-                    },
-                },
-            ],
-        },
-        {
-            "info": {"role": "assistant"},
-            "parts": [{"type": "text", "text": "Ahí está la lista."}],
-        },
-    ]
-    with patch(
-        "urllib.request.urlopen",
-        side_effect=_mock_urlopen(sse, {"/session/sess-1/message": messages}),
-    ):
+    sse = [_exec_started(), _exec_succeeded()]
+    rest = {
+        "/message": _rest_messages(
+            _assistant_msg([{"type": "text", "text": "Ahí está la lista."}]),
+            _assistant_msg(
+                [
+                    {
+                        "type": "tool",
+                        "id": "call-1",
+                        "name": "shell",
+                        "state": {
+                            "status": "completed",
+                            "input": {"command": "ls /tmp"},
+                            "content": [{"type": "text", "text": "file1\nfile2"}],
+                        },
+                    }
+                ]
+            ),
+        )
+    }
+    with patch("urllib.request.urlopen", side_effect=_mock_urlopen(sse, rest)):
         result = backend.query("list files", "")
 
     calls = [e for e in received if isinstance(e, ToolCallEvent)]
     results = [e for e in received if isinstance(e, ToolResultEvent)]
     assert len(calls) == 1
-    assert calls[0].name == "bash"
+    assert calls[0].name == "shell"
     assert calls[0].arguments == {"command": "ls /tmp"}
     assert len(results) == 1
     assert results[0].result == "file1\nfile2"
@@ -429,61 +515,62 @@ def test_query_publishes_tools_from_rest_when_stream_omits_them():
     assert types.index("ToolResultEvent") < types.index("DoneEvent")
 
 
-def test_permission_asked_new_format_allow():
-    """v1.14+ permission.asked (permission/patterns/tool.callID) is understood."""
-    policy = MagicMock(spec=PolicyEngine)
-    policy.check.return_value = Decision.ALLOW
+def test_rest_tools_are_not_republished_on_the_next_turn():
+    """Dedup sets live on the instance; reset_session() clears them."""
+    bus = ConversationBus()
+    received: list[object] = []
+    bus.subscribe(received.append)
+    backend = _make_backend(bus=bus)
 
-    backend = _make_backend(policy=policy)
-    perm_event = {
-        "type": "permission.asked",
-        "properties": {
-            "id": "per-9",
-            "sessionID": "sess-1",
-            "permission": "bash",
-            "patterns": ["ls"],
-            "metadata": {},
-            "always": ["always"],
-            "tool": {"messageID": "m1", "callID": "c9"},
-        },
+    sse = [_exec_started(), _text_delta("m1", 0, "ok"), _exec_succeeded()]
+    rest = {
+        "/message": _rest_messages(
+            _assistant_msg(
+                [
+                    {"type": "text", "text": "ok"},
+                    {
+                        "type": "tool",
+                        "id": "call-1",
+                        "name": "shell",
+                        "state": {
+                            "status": "completed",
+                            "input": {"command": "ls"},
+                            "content": [{"type": "text", "text": "out"}],
+                        },
+                    },
+                ]
+            ),
+        )
     }
-    sse = [perm_event, _text_delta("p1", "done"), _session_idle()]
+    with patch("urllib.request.urlopen", side_effect=_mock_urlopen(sse, rest)):
+        backend.query("turn one", "")
+        backend.query("turn two", "")
 
-    posted: list[tuple[str, dict]] = []
+    assert len([e for e in received if isinstance(e, ToolCallEvent)]) == 1
+    assert len([e for e in received if isinstance(e, ToolResultEvent)]) == 1
 
-    def _urlopen(req, timeout=None):
-        url = req if isinstance(req, str) else req.full_url
-        if "/event" in url:
-            return _FakeResp(_make_sse_bytes(*sse))
-        if hasattr(req, "data") and req.data:
-            posted.append((url, json.loads(req.data)))
-        return _FakeResp(b"{}")
-
-    with patch("urllib.request.urlopen", side_effect=_urlopen):
-        backend.query("list files", "")
-
-    policy.check.assert_called_once_with("bash", {"command": "ls"})
-    perm_replies = [(u, b) for u, b in posted if "permissions/per-9" in u]
-    assert perm_replies and perm_replies[0][1] == {"response": "once"}
+    with patch("urllib.request.urlopen", side_effect=_mock_urlopen([], {})):
+        backend.reset_session()
+    assert backend._tool_called == set()
+    assert backend._tool_resulted == set()
 
 
-# ── query: session error ──────────────────────────────────────────────────────
+# ── query: execution failure ──────────────────────────────────────────────────
 
 
-def test_query_session_error():
+def test_query_execution_failed_publishes_error():
     bus = ConversationBus()
     received: list[object] = []
     bus.subscribe(received.append)
 
     backend = _make_backend(bus=bus)
     sse = [
-        {
-            "type": "session.error",
-            "properties": {
-                "sessionID": "sess-1",
-                "error": {"name": "UnknownError", "data": {"message": "boom"}},
-            },
-        },
+        _exec_started(),
+        _ev(
+            "session.execution.failed",
+            sessionID="sess-1",
+            error={"type": "provider.no-route", "message": "Model unavailable: x/y"},
+        ),
     ]
 
     with patch("urllib.request.urlopen", side_effect=_mock_urlopen(sse)):
@@ -491,146 +578,107 @@ def test_query_session_error():
 
     errors = [e for e in received if isinstance(e, ErrorEvent)]
     assert len(errors) == 1
-    assert "boom" in errors[0].message
+    assert "Model unavailable" in errors[0].message
     assert not result.interrupted
+    assert result.response  # generic_error string
 
 
-# ── permission: ALLOW ─────────────────────────────────────────────────────────
+# ── permissions ───────────────────────────────────────────────────────────────
+
+
+def _permission_event(
+    action: str = "shell",
+    resources: list[str] | None = None,
+    perm_id: str = "per-1",
+    **extra: object,
+) -> dict:
+    return _ev(
+        "permission.asked",
+        id=perm_id,
+        sessionID="sess-1",
+        action=action,
+        resources=resources if resources is not None else ["ls"],
+        source={"type": "tool", "messageID": "m1", "id": "call-1"},
+        **extra,
+    )
 
 
 def test_permission_allow():
-    """PolicyEngine ALLOW → POST "once" immediately."""
+    """PolicyEngine ALLOW → reply "once" immediately."""
     policy = MagicMock(spec=PolicyEngine)
     policy.check.return_value = Decision.ALLOW
 
-    bus = ConversationBus()
-    backend = _make_backend(policy=policy, bus=bus)
+    backend = _make_backend(policy=policy)
+    sse = [_exec_started(), _permission_event(), _text_delta("m1", 0, "ok"), _exec_succeeded()]
+    side_effect, seen = _recorder(sse)
 
-    perm_event = {
-        "type": "permission.updated",
-        "properties": {
-            "id": "perm-1",
-            "sessionID": "sess-1",
-            "type": "bash",
-            "pattern": "ls",
-            "title": "Run ls",
-            "callID": "c1",
-            "metadata": {},
-            "time": {"created": 0},
-        },
-    }
-    sse = [
-        perm_event,
-        _text_delta("p1", "ok"),
-        _session_idle(),
-    ]
-
-    posted: list[tuple[str, dict]] = []
-
-    def _urlopen(req, timeout=None):
-        url = req if isinstance(req, str) else req.full_url
-        if "/event" in url:
-            return _FakeResp(_make_sse_bytes(*sse))
-        if hasattr(req, "data") and req.data:
-            posted.append((url, json.loads(req.data)))
-        return _FakeResp(b"{}")
-
-    with patch("urllib.request.urlopen", side_effect=_urlopen):
-        backend.query("hi", "")
+    with patch("urllib.request.urlopen", side_effect=side_effect):
+        backend.query("list files", "")
 
     policy.check.assert_called_once_with("bash", {"command": "ls"})
-    perm_replies = [(u, b) for u, b in posted if "permissions" in u]
-    assert len(perm_replies) == 1
-    assert perm_replies[0][1] == {"response": "once"}
-
-
-# ── permission: DENY ──────────────────────────────────────────────────────────
+    replies = [(u, b) for u, _m, b, _h in seen if "/permission/per-1/reply" in u]
+    assert replies and replies[0][1] == {"decision": "once"}
 
 
 def test_permission_deny():
-    """PolicyEngine DENY → POST "reject"."""
     policy = MagicMock(spec=PolicyEngine)
     policy.check.return_value = Decision.DENY
 
     backend = _make_backend(policy=policy)
-    perm_event = {
-        "type": "permission.updated",
-        "properties": {
-            "id": "perm-2",
-            "sessionID": "sess-1",
-            "type": "bash",
-            "pattern": "rm -rf /",
-            "title": "Delete root",
-            "callID": "c2",
-            "metadata": {},
-            "time": {"created": 0},
-        },
-    }
     sse = [
-        perm_event,
-        _text_delta("p1", "denied"),
-        _session_idle(),
+        _exec_started(),
+        _permission_event(resources=["rm -rf /"]),
+        _text_delta("m1", 0, "denied"),
+        _exec_succeeded(),
     ]
+    side_effect, seen = _recorder(sse)
 
-    posted: list[tuple[str, dict]] = []
-
-    def _urlopen(req, timeout=None):
-        url = req if isinstance(req, str) else req.full_url
-        if "/event" in url:
-            return _FakeResp(_make_sse_bytes(*sse))
-        if hasattr(req, "data") and req.data:
-            posted.append((url, json.loads(req.data)))
-        return _FakeResp(b"{}")
-
-    with patch("urllib.request.urlopen", side_effect=_urlopen):
+    with patch("urllib.request.urlopen", side_effect=side_effect):
         backend.query("delete everything", "")
 
-    perm_replies = [(u, b) for u, b in posted if "permissions" in u]
-    assert perm_replies[0][1] == {"response": "reject"}
+    replies = [(u, b) for u, _m, b, _h in seen if "/permission/per-1/reply" in u]
+    assert replies and replies[0][1] == {"decision": "reject"}
 
 
-# ── permission: CONFIRM → allow ───────────────────────────────────────────────
-
-
-def test_permission_confirm_user_allows():
-    """CONFIRM path: AwaitingConfirmationEvent emitted, user allows → POST "once"."""
+def test_permission_multiple_resources_takes_strictest():
+    """One DENY among several resources rejects the whole request."""
     policy = MagicMock(spec=PolicyEngine)
-    policy.check.return_value = Decision.CONFIRM
+    policy.check.side_effect = [Decision.ALLOW, Decision.DENY]
+
+    backend = _make_backend(policy=policy)
+    sse = [
+        _exec_started(),
+        _permission_event(resources=["ls", "rm -rf /"]),
+        _text_delta("m1", 0, "no"),
+        _exec_succeeded(),
+    ]
+    side_effect, seen = _recorder(sse)
+
+    with patch("urllib.request.urlopen", side_effect=side_effect):
+        backend.query("do things", "")
+
+    assert policy.check.call_count == 2
+    replies = [(u, b) for u, _m, b, _h in seen if "/permission/per-1/reply" in u]
+    assert replies and replies[0][1] == {"decision": "reject"}
+
+
+def test_permission_confirm_keeps_bash_name_on_the_wire():
+    """A CONFIRM on action "shell" is published to clients as "bash"."""
+    policy = MagicMock(spec=PolicyEngine)
+    policy.check.side_effect = [Decision.CONFIRM, Decision.ALLOW]
 
     bus = ConversationBus()
     received: list[object] = []
     bus.subscribe(received.append)
-
     backend = _make_backend(policy=policy, bus=bus)
 
-    perm_event = {
-        "type": "permission.updated",
-        "properties": {
-            "id": "perm-3",
-            "sessionID": "sess-1",
-            "type": "bash",
-            "pattern": "git push",
-            "title": "Push",
-            "callID": "c3",
-            "metadata": {},
-            "time": {"created": 0},
-        },
-    }
     sse = [
-        perm_event,
-        _text_delta("p1", "pushed"),
-        _session_idle(),
+        _exec_started(),
+        _permission_event(resources=["git push", "ls"]),
+        _text_delta("m1", 0, "pushed"),
+        _exec_succeeded(),
     ]
-
-    posted: list[tuple[str, dict]] = []
-
-    def _urlopen(req, timeout=None):
-        url = req if isinstance(req, str) else req.full_url
-        if "/event" in url:
-            return _FakeResp(_make_sse_bytes(*sse))
-        if hasattr(req, "data") and req.data:
-            posted.append((url, json.loads(req.data)))
-        return _FakeResp(b"{}")
+    side_effect, seen = _recorder(sse)
 
     def _allow_after_delay():
         time.sleep(0.05)
@@ -638,55 +686,31 @@ def test_permission_confirm_user_allows():
 
     threading.Thread(target=_allow_after_delay, daemon=True).start()
 
-    with patch("urllib.request.urlopen", side_effect=_urlopen):
+    with patch("urllib.request.urlopen", side_effect=side_effect):
         backend.query("git push", "")
 
     confirms = [e for e in received if isinstance(e, AwaitingConfirmationEvent)]
     assert len(confirms) == 1
     assert confirms[0].name == "bash"
+    assert confirms[0].tool_call_id == "call-1"
+    assert confirms[0].arguments["pattern"] == "git push; ls"
 
-    perm_replies = [(u, b) for u, b in posted if "permissions" in u]
-    assert perm_replies[0][1] == {"response": "once"}
-
-
-# ── permission: CONFIRM → deny ────────────────────────────────────────────────
+    replies = [(u, b) for u, _m, b, _h in seen if "/permission/per-1/reply" in u]
+    assert replies and replies[0][1] == {"decision": "once"}
 
 
 def test_permission_confirm_user_denies():
-    """CONFIRM path: user denies → POST "reject"."""
     policy = MagicMock(spec=PolicyEngine)
     policy.check.return_value = Decision.CONFIRM
 
     backend = _make_backend(policy=policy)
-
-    perm_event = {
-        "type": "permission.updated",
-        "properties": {
-            "id": "perm-4",
-            "sessionID": "sess-1",
-            "type": "bash",
-            "pattern": "git push",
-            "title": "Push",
-            "callID": "c4",
-            "metadata": {},
-            "time": {"created": 0},
-        },
-    }
     sse = [
-        perm_event,
-        _text_delta("p1", "not pushed"),
-        _session_idle(),
+        _exec_started(),
+        _permission_event(resources=["git push"]),
+        _text_delta("m1", 0, "not pushed"),
+        _exec_succeeded(),
     ]
-
-    posted: list[tuple[str, dict]] = []
-
-    def _urlopen(req, timeout=None):
-        url = req if isinstance(req, str) else req.full_url
-        if "/event" in url:
-            return _FakeResp(_make_sse_bytes(*sse))
-        if hasattr(req, "data") and req.data:
-            posted.append((url, json.loads(req.data)))
-        return _FakeResp(b"{}")
+    side_effect, seen = _recorder(sse)
 
     def _deny_after_delay():
         time.sleep(0.05)
@@ -694,62 +718,91 @@ def test_permission_confirm_user_denies():
 
     threading.Thread(target=_deny_after_delay, daemon=True).start()
 
-    with patch("urllib.request.urlopen", side_effect=_urlopen):
+    with patch("urllib.request.urlopen", side_effect=side_effect):
         backend.query("git push", "")
 
-    perm_replies = [(u, b) for u, b in posted if "permissions" in u]
-    assert perm_replies[0][1] == {"response": "reject"}
-
-
-# ── permission: CONFIRM timeout → reject ──────────────────────────────────────
+    replies = [(u, b) for u, _m, b, _h in seen if "/permission/per-1/reply" in u]
+    assert replies and replies[0][1] == {"decision": "reject"}
 
 
 def test_permission_confirm_timeout():
-    """CONFIRM path: timeout → POST "reject"."""
     import mirach.harness.providers.opencode as oc_module
 
     policy = MagicMock(spec=PolicyEngine)
     policy.check.return_value = Decision.CONFIRM
 
     backend = _make_backend(policy=policy)
-
-    perm_event = {
-        "type": "permission.updated",
-        "properties": {
-            "id": "perm-5",
-            "sessionID": "sess-1",
-            "type": "bash",
-            "pattern": "git push",
-            "title": "Push",
-            "callID": "c5",
-            "metadata": {},
-            "time": {"created": 0},
-        },
-    }
     sse = [
-        perm_event,
-        _text_delta("p1", "nope"),
-        _session_idle(),
+        _exec_started(),
+        _permission_event(resources=["git push"]),
+        _text_delta("m1", 0, "nope"),
+        _exec_succeeded(),
     ]
-
-    posted: list[tuple[str, dict]] = []
-
-    def _urlopen(req, timeout=None):
-        url = req if isinstance(req, str) else req.full_url
-        if "/event" in url:
-            return _FakeResp(_make_sse_bytes(*sse))
-        if hasattr(req, "data") and req.data:
-            posted.append((url, json.loads(req.data)))
-        return _FakeResp(b"{}")
+    side_effect, seen = _recorder(sse)
 
     with (
         patch.object(oc_module, "_CONFIRM_TIMEOUT", 0.05),
-        patch("urllib.request.urlopen", side_effect=_urlopen),
+        patch("urllib.request.urlopen", side_effect=side_effect),
     ):
         backend.query("git push", "")
 
-    perm_replies = [(u, b) for u, b in posted if "permissions" in u]
-    assert perm_replies[0][1] == {"response": "reject"}
+    replies = [(u, b) for u, _m, b, _h in seen if "/permission/per-1/reply" in u]
+    assert replies and replies[0][1] == {"decision": "reject"}
+
+
+def test_permission_external_directory_strips_glob_suffix():
+    policy = MagicMock(spec=PolicyEngine)
+    policy.check.return_value = Decision.ALLOW
+
+    backend = _make_backend(policy=policy)
+    sse = [
+        _exec_started(),
+        _permission_event(action="external_directory", resources=["/x/y/*"]),
+        _text_delta("m1", 0, "ok"),
+        _exec_succeeded(),
+    ]
+
+    with patch("urllib.request.urlopen", side_effect=_mock_urlopen(sse)):
+        backend.query("read there", "")
+
+    policy.check.assert_called_once_with("read_file", {"path": "/x/y"})
+
+
+# ── forms ─────────────────────────────────────────────────────────────────────
+
+
+def test_form_created_is_cancelled():
+    """The harness is headless: any form that opens is dismissed."""
+    backend = _make_backend()
+    sse = [
+        _exec_started(),
+        _ev("form.created", form={"id": "frm_1", "sessionID": "sess-1"}),
+        _text_delta("m1", 0, "ok"),
+        _exec_succeeded(),
+    ]
+    side_effect, seen = _recorder(sse)
+
+    with patch("urllib.request.urlopen", side_effect=side_effect):
+        backend.query("ask me", "")
+
+    deletes = [u for u, m, _b, _h in seen if m == "DELETE"]
+    assert any(u.endswith("/api/session/sess-1/form/frm_1") for u in deletes)
+
+
+def test_form_from_another_session_is_left_alone():
+    backend = _make_backend()
+    sse = [
+        _exec_started(),
+        _ev("form.created", form={"id": "frm_1", "sessionID": "other"}),
+        _text_delta("m1", 0, "ok"),
+        _exec_succeeded(),
+    ]
+    side_effect, seen = _recorder(sse)
+
+    with patch("urllib.request.urlopen", side_effect=side_effect):
+        backend.query("ask me", "")
+
+    assert not [u for u, m, _b, _h in seen if m == "DELETE"]
 
 
 # ── interrupt ─────────────────────────────────────────────────────────────────
@@ -759,13 +812,13 @@ def test_interrupt_returns_interrupted_result():
     """interrupt() while streaming blocks → LLMResult with interrupted=True."""
     backend = _make_backend()
 
-    initial_sse = _make_sse_bytes(_text_delta("p1", "..."))
+    initial_sse = _make_sse_bytes(_exec_started(), _text_delta("m1", 0, "..."))
 
     blocking_resp: list[_BlockingFakeResp] = []
 
     def _urlopen(req, timeout=None):
         url = req if isinstance(req, str) else req.full_url
-        if "/event" in url:
+        if "/api/event" in url:
             resp = _BlockingFakeResp(initial_sse)
             blocking_resp.append(resp)
             return resp
@@ -782,6 +835,30 @@ def test_interrupt_returns_interrupted_result():
 
     assert result.interrupted is True
     assert result.response == ""
+
+
+def test_interrupt_posts_to_the_interrupt_route_without_body():
+    backend = _make_backend()
+    side_effect, seen = _recorder([])
+
+    with patch("urllib.request.urlopen", side_effect=side_effect):
+        backend.interrupt()
+
+    posts = [(u, b) for u, m, b, _h in seen if m == "POST"]
+    assert posts == [("http://localhost:9999/api/session/sess-1/interrupt", None)]
+
+
+def test_compact_posts_to_the_compact_route():
+    backend = _make_backend()
+    backend._session_tokens = 999
+    side_effect, seen = _recorder([])
+
+    with patch("urllib.request.urlopen", side_effect=side_effect):
+        backend._compact()
+
+    posts = [(u, b) for u, m, b, _h in seen if m == "POST"]
+    assert posts == [("http://localhost:9999/api/session/sess-1/compact", {})]
+    assert backend._session_tokens == 0
 
 
 # ── session management ────────────────────────────────────────────────────────
@@ -809,19 +886,15 @@ def test_session_expired_after_timeout(monkeypatch):
 
 
 def test_reset_session_calls_delete():
-    posted_deletes: list[str] = []
-
-    def _urlopen(req, timeout=None):
-        if hasattr(req, "method") and req.method == "DELETE":
-            posted_deletes.append(req.full_url)
-        return _FakeResp(b"true")
-
     backend = _make_backend()
-    with patch("urllib.request.urlopen", side_effect=_urlopen):
+    side_effect, seen = _recorder([])
+
+    with patch("urllib.request.urlopen", side_effect=side_effect):
         backend.reset_session()
 
     assert backend._session_id is None
-    assert any("sess-1" in u for u in posted_deletes)
+    deletes = [u for u, m, _b, _h in seen if m == "DELETE"]
+    assert deletes == ["http://localhost:9999/api/session/sess-1"]
 
 
 def test_reset_session_skips_delete_when_no_session():
@@ -840,101 +913,197 @@ def test_reset_session_skips_delete_when_no_session():
     assert not called
 
 
-def test_query_creates_session_when_none():
-    """First query with no session_id → POST /session to create one."""
+def test_create_session_sends_rules_model_and_location():
     backend = OpenCodeServeBackend(
         policy=PolicyEngine(),
         bus=ConversationBus(),
         cwd="/tmp",
+        provider_id="opencode",
+        model_id="big-pickle",
     )
     backend._base_url = "http://localhost:9999"
+    backend._password = "pw"
 
     sse = [
-        _text_delta("p1", "hello", session_id="new-sess"),
-        _session_idle("new-sess"),
+        _exec_started("new-sess"),
+        _text_delta("m1", 0, "hello", "new-sess"),
+        _exec_succeeded("new-sess"),
     ]
 
     def _urlopen(req, timeout=None):
-        url = req if isinstance(req, str) else req.full_url
-        if "/event" in url:
+        url = req.full_url
+        if "/api/event" in url:
             return _FakeResp(_make_sse_bytes(*sse))
-        if "/session" in url and not any(
-            x in url for x in ["prompt_async", "permissions", "abort"]
-        ):
-            method = getattr(req, "method", "GET")
-            if method == "POST" and req.data == b"{}":
-                return _FakeResp(json.dumps({"id": "new-sess"}).encode())
+        if url.endswith("/api/session") and req.get_method() == "POST":
+            bodies.append(json.loads(req.data))
+            return _FakeResp(json.dumps({"data": {"id": "new-sess"}}).encode())
         return _FakeResp(b"{}")
 
+    bodies: list[dict] = []
     with patch("urllib.request.urlopen", side_effect=_urlopen):
         result = backend.query("hi", "")
 
     assert backend._session_id == "new-sess"
     assert result.response == "hello"
+    assert len(bodies) == 1
+    assert bodies[0]["permissions"] == _SESSION_RULES
+    assert bodies[0]["location"] == {"directory": "/tmp"}
+    assert bodies[0]["model"] == {"providerID": "opencode", "id": "big-pickle"}
 
 
-# ── new session: system prompt injection ─────────────────────────────────────
+def test_create_session_omits_model_when_not_configured():
+    backend = OpenCodeServeBackend(policy=PolicyEngine(), bus=ConversationBus(), cwd="/tmp")
+    backend._base_url = "http://localhost:9999"
+    backend._password = "pw"
+
+    bodies: list[dict] = []
+
+    def _urlopen(req, timeout=None):
+        bodies.append(json.loads(req.data))
+        return _FakeResp(json.dumps({"data": {"id": "s"}}).encode())
+
+    with patch("urllib.request.urlopen", side_effect=_urlopen):
+        backend._create_session()
+
+    assert "model" not in bodies[0]
 
 
-def test_query_injects_system_prompt_on_new_session():
-    """On a new session, system_prompt is included in the POST body."""
+def test_create_session_404_explains_the_version_requirement():
+    import urllib.error
+
+    backend = _make_backend()
+
+    def _urlopen(req, timeout=None):
+        raise urllib.error.HTTPError(req.full_url, 404, "Not Found", {}, io.BytesIO(b""))
+
+    with (
+        patch("urllib.request.urlopen", side_effect=_urlopen),
+        pytest.raises(RuntimeError, match="requires opencode >= 2.0"),
+    ):
+        backend._create_session()
+
+
+# ── new session: system prompt via instruction entries ───────────────────────
+
+
+def _new_session_backend() -> OpenCodeServeBackend:
     backend = _make_backend()
     backend._last_interaction = 0.0  # force new session
-    backend._session_id = "sess-1"
+    return backend
 
-    sse = [
-        _text_delta("p1", "ok"),
-        _session_idle(),
-    ]
 
-    bodies: list[dict] = []
+def _instruction_recorder(sse: list[dict], put_fails: bool = False):
+    seen: list[tuple[str, str, dict | None]] = []
 
     def _urlopen(req, timeout=None):
-        url = req if isinstance(req, str) else req.full_url
-        if "/event" in url:
-            return _FakeResp(_make_sse_bytes(*sse))
-        if hasattr(req, "data") and req.data:
+        import urllib.error
+
+        url = req.full_url
+        method = req.get_method()
+        body = None
+        if req.data:
             with contextlib.suppress(Exception):
-                bodies.append(json.loads(req.data))
-        if "/session" in url and not any(
-            x in url for x in ["prompt_async", "permissions", "abort"]
-        ):
-            method = getattr(req, "method", "POST")
-            if method == "POST":
-                return _FakeResp(json.dumps({"id": "sess-1"}).encode())
+                body = json.loads(req.data)
+        if "/api/event" in url:
+            return _FakeResp(_make_sse_bytes(*sse))
+        seen.append((url, method, body))
+        if method == "PUT" and put_fails:
+            raise urllib.error.HTTPError(url, 500, "boom", {}, io.BytesIO(b"{}"))
+        if url.endswith("/api/session") and method == "POST":
+            return _FakeResp(json.dumps({"data": {"id": "sess-1"}}).encode())
         return _FakeResp(b"{}")
 
-    with patch("urllib.request.urlopen", side_effect=_urlopen):
-        backend.query("hi", system_prompt="Be helpful.", obsidian_context="")
-
-    prompt_bodies = [b for b in bodies if "parts" in b]
-    assert len(prompt_bodies) == 1
-    assert "system" in prompt_bodies[0]
-    assert "Be helpful." in prompt_bodies[0]["system"]
+    return _urlopen, seen
 
 
-def test_query_no_system_prompt_on_existing_session():
-    """On a non-new session, system prompt is NOT re-injected."""
-    backend = _make_backend()
+def test_new_session_sends_instructions_and_keeps_the_prompt_clean():
+    backend = _new_session_backend()
+    sse = [_exec_started(), _text_delta("m1", 0, "ok"), _exec_succeeded()]
+    urlopen, seen = _instruction_recorder(sse)
 
-    sse = [
-        _text_delta("p1", "ok"),
-        _session_idle(),
-    ]
+    with patch("urllib.request.urlopen", side_effect=urlopen):
+        backend.query("hi", system_prompt="Be helpful.", obsidian_context="Remember X.")
 
-    bodies: list[dict] = []
+    puts = [(u, b) for u, m, b in seen if m == "PUT"]
+    assert len(puts) == 1
+    assert puts[0][0].endswith(
+        "/api/experimental/session/sess-1/instructions/entries/mirach-system"
+    )
+    value = puts[0][1]["value"]
+    assert "Be helpful." in value
+    assert "Remember X." in value
 
-    def _urlopen(req, timeout=None):
-        url = req if isinstance(req, str) else req.full_url
-        if "/event" in url:
-            return _FakeResp(_make_sse_bytes(*sse))
-        if hasattr(req, "data") and req.data:
-            with contextlib.suppress(Exception):
-                bodies.append(json.loads(req.data))
-        return _FakeResp(b"{}")
+    prompts = [b for u, m, b in seen if u.endswith("/prompt")]
+    assert prompts == [{"text": "hi"}]
 
-    with patch("urllib.request.urlopen", side_effect=_urlopen):
+
+def test_new_session_falls_back_to_prefix_when_the_put_fails():
+    backend = _new_session_backend()
+    sse = [_exec_started(), _text_delta("m1", 0, "ok"), _exec_succeeded()]
+    urlopen, seen = _instruction_recorder(sse, put_fails=True)
+
+    with patch("urllib.request.urlopen", side_effect=urlopen):
         backend.query("hi", system_prompt="Be helpful.")
 
-    prompt_bodies = [b for b in bodies if "parts" in b]
-    assert "system" not in prompt_bodies[0]
+    prompts = [b for u, m, b in seen if u.endswith("/prompt")]
+    assert len(prompts) == 1
+    assert prompts[0]["text"].startswith("Follow these instructions for the ENTIRE conversation:")
+    assert prompts[0]["text"].endswith("hi")
+
+
+def test_instruction_entries_can_be_switched_off(monkeypatch):
+    import mirach.harness.providers.opencode as oc_module
+
+    monkeypatch.setattr(oc_module, "_USE_INSTRUCTION_ENTRIES", False)
+    backend = _new_session_backend()
+    sse = [_exec_started(), _text_delta("m1", 0, "ok"), _exec_succeeded()]
+    urlopen, seen = _instruction_recorder(sse)
+
+    with patch("urllib.request.urlopen", side_effect=urlopen):
+        backend.query("hi", system_prompt="Be helpful.")
+
+    assert not [u for u, m, _b in seen if m == "PUT"]
+    prompts = [b for u, m, b in seen if u.endswith("/prompt")]
+    assert prompts[0]["text"].startswith("Follow these instructions for the ENTIRE conversation:")
+
+
+def test_existing_session_neither_puts_nor_prefixes():
+    backend = _make_backend()  # not expired
+    sse = [_exec_started(), _text_delta("m1", 0, "ok"), _exec_succeeded()]
+    urlopen, seen = _instruction_recorder(sse)
+
+    with patch("urllib.request.urlopen", side_effect=urlopen):
+        backend.query("hi", system_prompt="Be helpful.")
+
+    assert not [u for u, m, _b in seen if m == "PUT"]
+    prompts = [b for u, m, b in seen if u.endswith("/prompt")]
+    assert prompts == [{"text": "hi"}]
+
+
+# ── start(): password plumbing ────────────────────────────────────────────────
+
+
+def test_start_parses_the_listen_line_and_passes_the_password(monkeypatch):
+    monkeypatch.setenv("OPENCODE_SERVER_PASSWORD", "stale-v1-value")
+    backend = OpenCodeServeBackend(policy=PolicyEngine(), bus=ConversationBus(), cwd="/tmp")
+
+    fake_proc = MagicMock()
+    fake_proc.stdout.readline.side_effect = ["server listening on http://127.0.0.1:5555\n"]
+    fake_proc.poll.return_value = None
+    fake_proc.stdout.__iter__ = lambda _self: iter(())
+
+    captured: dict = {}
+
+    def _popen(args, **kwargs):
+        captured.update(kwargs)
+        captured["args"] = args
+        return fake_proc
+
+    with patch("subprocess.Popen", side_effect=_popen):
+        backend.start()
+
+    assert backend._base_url == "http://127.0.0.1:5555"
+    env = captured["env"]
+    assert env["OPENCODE_PASSWORD"] == backend._password
+    assert backend._password
+    assert "OPENCODE_SERVER_PASSWORD" not in env

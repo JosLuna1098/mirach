@@ -8,7 +8,6 @@ systemd helpers are mocked to a no-op lambda.
 from __future__ import annotations
 
 import io
-import json
 import tarfile
 
 import pytest
@@ -225,8 +224,11 @@ def test_roundtrip_machine_hints_in_yes_mode(src_repo, bundle, tmp_path, monkeyp
     assert env.get("MIRACH_VOICE") == "es_MX-ald-medium.onnx"
 
 
-def test_roundtrip_opencode_json_updated(src_repo, bundle, tmp_path, monkeypatch):
-    """Import updates ~/.config/opencode/opencode.json with the skills path."""
+def test_roundtrip_skills_land_in_the_autodiscovered_dir(src_repo, bundle, tmp_path, monkeypatch):
+    """Import copies skills to ~/.config/opencode/skills/ and writes no config.
+
+    opencode 2.x auto-discovers that directory; the v1 `skills.paths` key is gone.
+    """
     dest_repo = tmp_path / "dest"
     dest_repo.mkdir()
     dest_env = dest_repo / "mirach.env"
@@ -237,11 +239,9 @@ def test_roundtrip_opencode_json_updated(src_repo, bundle, tmp_path, monkeypatch
 
     main(["--env-file", str(dest_env), "config", "import", str(bundle), "--yes"])
 
-    ocode_cfg = fake_home / ".config" / "opencode" / "opencode.json"
-    assert ocode_cfg.exists()
-    cfg = json.loads(ocode_cfg.read_text())
-    skills_paths = cfg.get("skills", {}).get("paths", [])
-    assert any("opencode/skills" in p for p in skills_paths)
+    skills_dir = fake_home / ".config" / "opencode" / "skills"
+    assert (skills_dir / "test-skill" / "SKILL.md").exists()
+    assert not (fake_home / ".config" / "opencode" / "opencode.json").exists()
 
 
 def test_import_yes_overwrites_existing(src_repo, bundle, tmp_path, monkeypatch):

@@ -127,3 +127,60 @@ def test_backend_unknown_name_returns_error(tmp_path):
     f = tmp_path / "mirach.env"
     rc = main(["--env-file", str(f), "backend", "foobar"])
     assert rc != 0
+
+
+# ── _validate_opencode_bin: version gate ──────────────────────────────────────
+
+
+def _fake_run(version_output: bytes):
+    """Stub subprocess.run for `opencode --version`."""
+
+    class _R:
+        returncode = 0
+        stdout = version_output
+        stderr = b""
+
+    def _run(*_args, **_kwargs):
+        return _R()
+
+    return _run
+
+
+def test_validate_opencode_bin_rejects_v1(monkeypatch, tmp_path):
+    from mirach.cli import _validate_opencode_bin
+
+    fake_bin = tmp_path / "opencode"
+    fake_bin.write_text("#!/bin/sh\n")
+    fake_bin.chmod(0o755)
+    monkeypatch.setattr("subprocess.run", _fake_run(b"1.18.29\n"))
+
+    ok, msg = _validate_opencode_bin(str(fake_bin))
+    assert not ok
+    assert "requires opencode >= 2.0" in msg
+    assert "1.18.29" in msg
+
+
+def test_validate_opencode_bin_accepts_v2(monkeypatch, tmp_path):
+    from mirach.cli import _validate_opencode_bin
+
+    fake_bin = tmp_path / "opencode"
+    fake_bin.write_text("#!/bin/sh\n")
+    fake_bin.chmod(0o755)
+    monkeypatch.setattr("subprocess.run", _fake_run(b"opencode v2.0.5\n"))
+
+    ok, resolved = _validate_opencode_bin(str(fake_bin))
+    assert ok
+    assert resolved == str(fake_bin)
+
+
+def test_validate_opencode_bin_accepts_unparseable_version(monkeypatch, tmp_path):
+    from mirach.cli import _validate_opencode_bin
+
+    fake_bin = tmp_path / "opencode"
+    fake_bin.write_text("#!/bin/sh\n")
+    fake_bin.chmod(0o755)
+    monkeypatch.setattr("subprocess.run", _fake_run(b"dev build\n"))
+
+    ok, resolved = _validate_opencode_bin(str(fake_bin))
+    assert ok
+    assert resolved == str(fake_bin)
