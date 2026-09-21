@@ -243,9 +243,9 @@ documented in [`mirach.env.example`](mirach.env.example).
 | `MIRACH_VOICE_SPEED` | `1.2` | Piper `length_scale` (>1 = slower). |
 | `MIRACH_MIC` | _(system default)_ | Substring match against your mic name. Empty = system default. |
 | `MIRACH_SAMPLE_RATE` | `48000` | Native rate of your mic. |
-| `MIRACH_OPENCODE_MODEL` | `opencode/deepseek-v4-flash-free` | Any OpenCode model id. |
-| `MIRACH_OPENCODE_TIMEOUT` | `120` | Seconds before killing OpenCode (normal queries). |
-| `MIRACH_OPENCODE_TIMEOUT_CODING` | `300` | Seconds for coding-related queries (5 min). |
+| `MIRACH_OPENCODE_SERVE_PROVIDER_ID` | *(empty)* | opencode provider id, e.g. `opencode`. Set together with the model id; empty = opencode's default model. |
+| `MIRACH_OPENCODE_SERVE_MODEL_ID` | *(empty)* | opencode model id, e.g. `big-pickle`. |
+| `MIRACH_OPENCODE_BIN` | `opencode` | Path or name of the opencode binary (>= 2.0). |
 | `MIRACH_SESSION_IDLE_TIMEOUT` | `3600` | Seconds of inactivity before starting a fresh LLM session (1 hour). |
 | `MIRACH_FILLER_DELAY` | `6.0` | Seconds before the first / next filler. |
 | `MIRACH_FILLERS` | _(localized)_ | Pipe-separated override: `"hmm.\|hold on.\|one sec."` |
@@ -326,7 +326,7 @@ mirach config import mirach-config-<date>.tar.gz
                                      ├─ AudioRecorder (sounddevice)
                                      ├─ WhisperTranscriber  (faster-whisper, CUDA)
                                      ├─ PiperSpeaker        (piper-tts)
-                                     ├─ OpenCodeBackend     (subprocess: opencode run)
+                                     ├─ OpenCodeServeBackend (supervises `opencode serve`, HTTP+SSE API v2)
                                      ├─ ConversationLog     (markdown per session)
                                      ├─ ConversationHTML    (styled HTML viewer)
                                      ├─ ObsidianCache       (persistent memory)
@@ -344,7 +344,8 @@ mirach/
   ├── audio.py             # thread-safe mic capture
   ├── stt.py               # WhisperTranscriber
   ├── tts.py               # PiperSpeaker (interruptible)
-  ├── llm.py               # OpenCodeBackend (interruptible, progressive feedback)
+  ├── llm_types.py         # LLMBackend protocol + LLMResult
+  ├── harness/             # backends: providers/opencode.py (opencode serve, API v2), native loop, policy, HTTP server
   ├── ipc.py               # Unix socket server
   ├── notify.py            # notify-send + beep WAV generation
   ├── conversation.py      # markdown transcript per session

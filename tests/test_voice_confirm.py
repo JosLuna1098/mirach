@@ -189,3 +189,50 @@ def test_voice_confirm_timeout_under_opencode_permission_timeout():
     from mirach.harness.providers.opencode import _CONFIRM_TIMEOUT
 
     assert config.VOICE_CONFIRM_TIMEOUT < _CONFIRM_TIMEOUT
+
+
+# ── the spoken question must not leak into the recorded answer ───────────────
+
+
+def test_first_press_cuts_the_spoken_question(asst):
+    """The mic opens only after the question's TTS is silenced — otherwise the
+    recording holds the question ("…responde sí o no") and a "no" reads as yes."""
+    asst._active_channel = "voice"
+    asst._begin_voice_confirm(_event())
+    calls: list[str] = []
+    asst._tts.interrupt.side_effect = lambda: calls.append("tts.interrupt")
+    asst._audio.start.side_effect = lambda: calls.append("audio.start")
+
+    asst.toggle()
+
+    assert calls == ["tts.interrupt", "audio.start"]
+    asst._clear_voice_confirm()
+
+
+def test_second_press_reenables_tts(asst):
+    asst._active_channel = "voice"
+    asst._stt.transcribe.return_value = "sí"
+    asst._begin_voice_confirm(_event())
+    asst.toggle()
+    asst.toggle()
+    assert _wait_until(lambda: asst._fake.confirmed == ["tc1"])
+    asst._tts.clear_interrupt.assert_called()
+
+
+@pytest.mark.parametrize(
+    "answer",
+    ["y responde sí o no. No.", "sí... no, mejor no", "yes, no wait, cancel", "no"],
+)
+def test_negative_word_wins_over_yes(answer):
+    assert not Assistant._is_affirmative(answer)
+
+
+def test_question_echo_plus_yes_still_denies():
+    """Known trade-off: if the question leaks in ("sí o no") the answer is unclear,
+    so it denies. Safe by default — the TTS cut above keeps this from happening."""
+    assert not Assistant._is_affirmative("y responde sí o no. Sí.")
+
+
+def test_describe_tool_uses_opencode_pattern():
+    ev = _event(name="bash", arguments={"title": "shell", "pattern": "rm notas.txt"})
+    assert Assistant._describe_tool(ev) == "bash: rm notas.txt"

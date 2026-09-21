@@ -5,11 +5,11 @@ description: Web search via OpenCode's built-in web search tools. Use when the u
 
 # Web Search
 
-OpenCode has built-in web search capabilities available through the `--dangerously-skip-permissions` flag. Use these native tools instead of external scripts.
+OpenCode ships built-in `websearch` and `webfetch` tools. Use these native tools instead of external scripts.
 
 ## How to search
 
-Use OpenCode's built-in web search tool. The daemon already runs with `--dangerously-skip-permissions`, so the search tool is available without asking.
+Use OpenCode's built-in `websearch` tool; it needs no confirmation. Fetching a specific page with `webfetch` goes through Mirach's permission policy, so the user may be asked to confirm it.
 
 ## Rules
 

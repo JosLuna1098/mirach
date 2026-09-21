@@ -39,7 +39,7 @@ test:
 	$(PY) -m pytest
 
 lint:
-	ruff check .
+	$(PY) -m ruff check .
 
 fmt:
-	ruff check --fix . && ruff format .
+	$(PY) -m ruff check --fix . && $(PY) -m ruff format .

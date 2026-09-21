@@ -123,6 +123,11 @@ class OpenCodeServeBackend:
         self._tool_called: set[str] = set()
         self._tool_resulted: set[str] = set()
 
+        # Why a permission was rejected during the current turn: "" (none),
+        # "user" (said no / timed out) or "policy". opencode 2.x ends the turn as
+        # interrupted on a rejection, so the model never gets to explain itself.
+        self._turn_denied: str = ""
+
         # Current context size in tokens. opencode serve does not deliver token
         # counts over the SSE stream, so this is refreshed from the REST API
         # (_fetch_session_tokens) after each turn. Zeroed on reset/compact.
@@ -254,6 +259,7 @@ class OpenCodeServeBackend:
 
         self._interrupted.clear()
         self._confirm_event.clear()
+        self._turn_denied = ""
 
         # The system prompt goes into a session instruction entry so it survives
         # every turn. If that fails, fall back to prefixing the first message.
@@ -363,6 +369,16 @@ class OpenCodeServeBackend:
         if error_msg:
             self._bus.publish(ErrorEvent(message=error_msg))
             return LLMResult(i18n.t("generic_error"), new_session, False, time.time() - t0)
+
+        # A rejected permission ends the turn before the model can answer, and any
+        # text it produced beforehand ("I'll delete that for you…") would sound as
+        # if the action happened. Say plainly that it did not.
+        if self._turn_denied:
+            msg = i18n.t("action_blocked" if self._turn_denied == "policy" else "action_denied")
+            self._last_interaction = time.time()
+            self._publish_rest_tools()
+            self._bus.publish(DoneEvent(content=msg))
+            return LLMResult(msg, new_session, False, time.time() - t0)
 
         # The REST message store is authoritative: it holds only the assistant's
         # "text" parts, with no reasoning mixed in. The streamed accumulation is
@@ -625,6 +641,7 @@ class OpenCodeServeBackend:
             # Make the policy denial visible to clients — otherwise the tool
             # silently fails and the user can't tell why nothing happened.
             self._bus.publish(ErrorEvent(message=f"[policy] {action} denied: {pattern or title}"))
+            self._turn_denied = "policy"
             self._reply_permission(session_id, perm_id, "reject")
 
         else:  # CONFIRM
@@ -644,14 +661,10 @@ class OpenCodeServeBackend:
             self._confirm_event.clear()
             self._confirm_result = True
             confirmed = self._confirm_event.wait(timeout=_CONFIRM_TIMEOUT)
-            if not confirmed or self._interrupted.is_set():
-                self._reply_permission(session_id, perm_id, "reject")
-            else:
-                self._reply_permission(
-                    session_id,
-                    perm_id,
-                    "once" if self._confirm_result else "reject",
-                )
+            allow = confirmed and not self._interrupted.is_set() and self._confirm_result
+            if not allow:
+                self._turn_denied = "user"
+            self._reply_permission(session_id, perm_id, "once" if allow else "reject")
 
     def _reply_permission(self, session_id: str, perm_id: str, response: str) -> None:
         try:

@@ -640,6 +640,60 @@ def test_permission_deny():
     assert replies and replies[0][1] == {"decision": "reject"}
 
 
+def test_policy_denial_answers_plainly_instead_of_model_text():
+    """opencode 2.x ends the turn on a rejection; whatever the model said before
+    ("I'll delete it…") must not be spoken as if the action happened."""
+    policy = MagicMock(spec=PolicyEngine)
+    policy.check.return_value = Decision.DENY
+
+    backend = _make_backend(policy=policy)
+    sse = [
+        _exec_started(),
+        _text_delta("m1", 0, "Claro, lo borro ahora."),
+        _permission_event(resources=["rm -rf /"]),
+        _ev("session.execution.interrupted", sessionID="sess-1", reason="shutdown"),
+    ]
+    side_effect, _seen = _recorder(sse)
+
+    with patch("urllib.request.urlopen", side_effect=side_effect):
+        result = backend.query("delete everything", "")
+
+    from mirach import i18n
+
+    assert result.response == i18n.t("action_blocked")
+    assert not result.interrupted
+
+
+def test_user_denial_answers_plainly(monkeypatch):
+    policy = MagicMock(spec=PolicyEngine)
+    policy.check.return_value = Decision.CONFIRM
+
+    backend = _make_backend(policy=policy)
+    sse = [
+        _exec_started(),
+        _permission_event(resources=["rm notas.txt"]),
+        _ev("session.execution.interrupted", sessionID="sess-1", reason="shutdown"),
+    ]
+    side_effect, seen = _recorder(sse)
+
+    # Answer "no" shortly after the confirmation is requested — from another
+    # thread, as the real clients do (the handler clears the event before waiting).
+    def _deny_later(e: object) -> None:
+        if getattr(e, "type", "") == "awaiting_confirmation":
+            threading.Timer(0.05, backend.deny, args=("x",)).start()
+
+    backend._bus.subscribe(_deny_later)
+
+    with patch("urllib.request.urlopen", side_effect=side_effect):
+        result = backend.query("borra notas", "")
+
+    from mirach import i18n
+
+    assert result.response == i18n.t("action_denied")
+    replies = [b for u, _m, b, _h in seen if "/permission/per-1/reply" in u]
+    assert replies == [{"decision": "reject"}]
+
+
 def test_permission_multiple_resources_takes_strictest():
     """One DENY among several resources rejects the whole request."""
     policy = MagicMock(spec=PolicyEngine)

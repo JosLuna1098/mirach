@@ -103,6 +103,26 @@ _AFFIRMATIVE_WORDS = frozenset(
     }
 )
 
+# A negative word anywhere in the answer wins over any yes-word: "sí... no, mejor
+# no" must deny. Unclear answers already deny, so this only ever makes it safer.
+_NEGATIVE_WORDS = frozenset(
+    {
+        "no",
+        "nope",
+        "nunca",
+        "cancela",
+        "cancelar",
+        "cancel",
+        "detente",
+        "stop",
+        "niego",
+        "negativo",
+        "deny",
+        "denied",
+        "never",
+    }
+)
+
 
 # Built-in trigger phrases that bypass the LLM entirely.
 # Keys are lowercase trigger phrases, values are (i18n response key, handler name).
@@ -604,6 +624,10 @@ class Assistant:
                     return  # answered or timed out between toggle's read and here
                 pending.recording = True
             pending.timer.cancel()
+            # Cut the spoken question first: if it is still playing, the mic
+            # records it — and the question itself contains "sí"/"yes", which
+            # would turn a spoken "no" into a confirmation.
+            self._tts.interrupt()
             self._begin_recording()
             return
         threading.Thread(target=self._finish_voice_confirm, args=(pending,), daemon=True).start()
@@ -612,6 +636,9 @@ class Assistant:
         """Stop the answer recording, transcribe it, and confirm/deny accordingly."""
         audio = self._audio.stop()
         pending.recording = False
+        # Re-enable playback (silenced on the first press) so the turn's final
+        # response can be spoken.
+        self._tts.clear_interrupt()
         text = self._stt.transcribe(audio) if audio is not None else ""
         log.info("Voice confirmation answer: %r", text)
         if self._is_affirmative(text):
@@ -651,7 +678,7 @@ class Assistant:
     def _describe_tool(event) -> str:
         """Build a short spoken description of a tool call for the confirm question."""
         args = getattr(event, "arguments", None) or {}
-        for key in ("command", "cmd", "path", "file", "query", "url"):
+        for key in ("command", "cmd", "path", "file", "query", "url", "pattern"):
             val = args.get(key)
             if isinstance(val, str) and val.strip():
                 return f"{event.name}: {val.strip()}"
@@ -659,8 +686,14 @@ class Assistant:
 
     @staticmethod
     def _is_affirmative(text: str) -> bool:
-        """True if a transcribed answer contains a yes-word. Unclear → False (deny)."""
-        return any(w in _AFFIRMATIVE_WORDS for w in re.findall(r"\w+", text.lower()))
+        """True if a transcribed answer contains a yes-word and no no-word.
+
+        Unclear → False (deny); a negative word anywhere also denies.
+        """
+        words = re.findall(r"\w+", text.lower())
+        if any(w in _NEGATIVE_WORDS for w in words):
+            return False
+        return any(w in _AFFIRMATIVE_WORDS for w in words)
 
     # ── Slot arbitration (queue drain vs. voice vs. interrupt) ──────────
 
