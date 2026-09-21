@@ -87,6 +87,7 @@ notify-send "System Status" "CPU: ${CPU}%\nMemory: ${MEM}\nDisk: ${DISK}"
 
 import datetime
 import subprocess
+
 today = datetime.datetime.now().strftime("%A, %B %d")
 subprocess.run(["notify-send", "Today", today])
 ```
