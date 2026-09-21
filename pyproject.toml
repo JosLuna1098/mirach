@@ -13,7 +13,7 @@ authors = [{ name = "josluna" }]
 dependencies = [
     "faster-whisper>=1.2.1,<2.0",
     "piper-tts>=1.4.2,<2.0",
-    "pyyaml>=6.0,<7.0",
+    "pyyaml>=6.0.3,<7.0",
     "sounddevice>=0.5.5,<1.0",
     "numpy>=2.4.6,<3.0",
 ]
